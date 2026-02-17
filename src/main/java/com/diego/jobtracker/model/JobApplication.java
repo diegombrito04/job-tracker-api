@@ -1,3 +1,4 @@
+// src/main/java/com/diego/jobtracker/model/JobApplication.java
 package com.diego.jobtracker.model;
 
 import jakarta.persistence.*;
@@ -28,8 +29,6 @@ public class JobApplication {
     private ApplicationStatus status;
 
     private LocalDate appliedDate;
-
-    // getters/setters
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }

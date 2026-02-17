@@ -1,3 +1,4 @@
+// src/main/java/com/diego/jobtracker/dto/UpdateJobApplicationRequest.java
 package com.diego.jobtracker.dto;
 
 import com.diego.jobtracker.model.ApplicationStatus;

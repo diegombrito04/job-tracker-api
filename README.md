@@ -1,95 +1,106 @@
-# Job Tracker API
+# Job Tracker (API + Web)
 
-API REST para registrar e acompanhar candidaturas de emprego (company, role, status, appliedDate).
+Aplicação fullstack para registrar e acompanhar candidaturas de emprego.
 
-## Tech Stack
+## Visão Geral
+
+Este repositório contém:
+- `job-tracker-api` (raiz): backend REST em Spring Boot
+- `job-tracker-web`: frontend em React + TypeScript + Vite
+
+Funcionalidades principais:
+- CRUD de candidaturas (`company`, `role`, `status`, `appliedDate`)
+- Filtro por status, busca e paginação
+- Dashboard e estatísticas de conversão
+- Tema claro/escuro
+- Internacionalização (PT/EN)
+
+## Stack
+
+Backend:
 - Java 21
-- Spring Boot
-- Spring Web + Validation
+- Spring Boot 3
+- Spring Web
+- Spring Validation
 - Spring Data JPA
-- H2 Database
-- SpringDoc OpenAPI (Swagger UI)
+- Spring Security (config aberto para rotas da API no ambiente atual)
+- H2 Database (em memória)
+- SpringDoc OpenAPI (Swagger)
 
-## Como rodar
+Frontend:
+- React 19 + TypeScript
+- Vite
+- Tailwind CSS
+- React Router
 
-Na pasta do projeto:
+## Pré-requisitos
+
+- Java 21+
+- Node.js 20+ e npm
+
+## Como Rodar Localmente
+
+### 1) Backend (porta 8080)
+
+Na raiz do projeto:
+
 ```bash
 ./mvnw spring-boot:run
 ```
 
-A API sobe em:
-* http://localhost:8080
+URLs úteis:
+- API: `http://localhost:8080`
+- Swagger UI: `http://localhost:8080/swagger-ui/index.html`
+- H2 Console: `http://localhost:8080/h2-console`
 
-Swagger UI:
-* http://localhost:8080/swagger-ui/index.html
+Config H2 Console:
+- JDBC URL: `jdbc:h2:mem:jobtrackerdb`
+- User: `sa`
+- Password: vazio
 
-H2 Console:
-* http://localhost:8080/h2-console
+### 2) Frontend (porta 5173)
 
-### Config do H2 Console
-* JDBC URL: `jdbc:h2:file:./data/jobtrackerdb` (ou `jdbc:h2:mem:jobtrackerdb` se você estiver usando mem)
-* User: `sa`
-* Password: (vazio)
+Em outro terminal:
 
-## Endpoints
-
-### Health check
-* `GET /health`
-
-### Criar candidatura
-* `POST /applications`
-
-Exemplo:
 ```bash
-curl -X POST http://localhost:8080/applications \
-  -H "Content-Type: application/json" \
-  -d '{"company":"Amazon","role":"Backend Intern","status":"APPLIED","appliedDate":"2026-02-15"}'
+cd job-tracker-web
+npm install
+npm run dev
 ```
 
-### Listar candidaturas (com paginação e ordenação)
-* `GET /applications?page=0&size=5&sort=appliedDate,desc`
+App Web:
+- `http://localhost:5173`
 
-Exemplo:
+## Scripts Úteis
+
+Backend (raiz):
+
 ```bash
-curl "http://localhost:8080/applications?page=0&size=5&sort=appliedDate,desc"
+./mvnw test
+./mvnw spring-boot:run
 ```
 
-### Filtrar por status
-* `GET /applications?status=APPLIED`
+Frontend (`job-tracker-web`):
 
-Exemplo:
 ```bash
-curl "http://localhost:8080/applications?status=APPLIED"
+npm run dev
+npm run lint
+npm run build
+npm run preview
 ```
 
-### Buscar por ID
-* `GET /applications/{id}`
+## Endpoints da API
 
-Exemplo:
-```bash
-curl "http://localhost:8080/applications/1"
-```
+- `GET /health`
+- `GET /applications`
+- `POST /applications`
+- `GET /applications/{id}`
+- `PUT /applications/{id}`
+- `PATCH /applications/{id}/status`
+- `DELETE /applications/{id}`
 
-### Atualizar apenas o status
-* `PATCH /applications/{id}/status`
-
-Exemplo:
-```bash
-curl -i -X PATCH http://localhost:8080/applications/1/status \
-  -H "Content-Type: application/json" \
-  -d '{"status":"INTERVIEW"}'
-```
-
-### Deletar
-* `DELETE /applications/{id}`
-
-Exemplo:
-```bash
-curl -X DELETE http://localhost:8080/applications/1
-```
-
-## Status possíveis
-* `APPLIED`
-* `INTERVIEW`
-* `OFFER`
-* `REJECTED`
+Status possíveis:
+- `APPLIED`
+- `INTERVIEW`
+- `OFFER`
+- `REJECTED`
