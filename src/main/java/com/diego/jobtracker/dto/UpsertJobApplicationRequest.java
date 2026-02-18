@@ -17,6 +17,11 @@ public record UpsertJobApplicationRequest(
         @NotNull(message = "status is required")
         ApplicationStatus status,
 
-        // deixa opcional (pode ser null). Se quiser obrigar, troca pra @NotNull.
-        LocalDate appliedDate
+        LocalDate appliedDate,
+
+        String notes,
+
+        String jobUrl,
+
+        String salary
 ) {}

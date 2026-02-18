@@ -1,0 +1,12 @@
+target/
+.mvn/
+*.md
+.git/
+.github/
+job-tracker-web/
+docker-compose*.yml
+.env
+.env.example
+*.iml
+.idea/
+data/

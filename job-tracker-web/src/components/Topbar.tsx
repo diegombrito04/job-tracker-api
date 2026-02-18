@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, ChevronLeft, ChevronRight, Menu, Moon, Search, Settings, Sun, X } from "lucide-react";
+import { Bell, ChevronLeft, ChevronRight, LogOut, Menu, Moon, Search, Settings, Sun, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useSearch } from "../context/SearchContext";
 import { useTheme } from "../context/ThemeContext";
 import { useTranslation, useUser } from "../context/UserContext";
+import { useAuth } from "../context/AuthContext";
 
 type Props = {
   onOpenSidebar: () => void;
@@ -16,6 +17,7 @@ export function Topbar({ onOpenSidebar, onToggleSidebarVisibility, sidebarVisibl
   const { query, setQuery } = useSearch();
   const { theme, toggleTheme } = useTheme();
   const { profile } = useUser();
+  const { logout } = useAuth();
   const t = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
@@ -198,6 +200,17 @@ export function Topbar({ onOpenSidebar, onToggleSidebarVisibility, sidebarVisibl
                   <span className="text-xs text-[#6e6e73] dark:text-[#98989d]">
                     {theme === "dark" ? "🌕" : "🌑"}
                   </span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setDropdownOpen(false);
+                    logout();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm text-[#ff3b30] hover:bg-[#ff3b30]/10 transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span className="flex-1 text-left">{t.logout}</span>
                 </button>
               </div>
 

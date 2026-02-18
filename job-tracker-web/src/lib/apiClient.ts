@@ -1,4 +1,5 @@
 import type { Application, ApplicationStatus, PageResponse } from "./types";
+import { buildAuthJsonHeaders, notifyUnauthorizedFromStatus } from "./auth";
 
 const API_BASE =
   import.meta.env.VITE_API_URL ||
@@ -8,10 +9,14 @@ const API_BASE =
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    credentials: "include",
+    headers: buildAuthJsonHeaders(init?.headers),
   });
 
-  if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
+  if (!res.ok) {
+    notifyUnauthorizedFromStatus(res.status);
+    throw new Error(`Erro HTTP ${res.status}`);
+  }
   if (res.status === 204) return undefined as T;
 
   const ct = res.headers.get("content-type") || "";

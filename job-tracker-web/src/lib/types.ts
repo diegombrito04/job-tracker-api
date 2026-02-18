@@ -6,6 +6,10 @@ export type Application = {
   role: string;
   status: ApplicationStatus;
   appliedDate: string; // yyyy-mm-dd
+  notes?: string | null;
+  jobUrl?: string | null;
+  salary?: string | null;
+  updatedAt?: string | null;
 };
 
 export type PageResponse<T> = {
@@ -18,4 +22,18 @@ export type PageResponse<T> = {
   last: boolean;
   empty: boolean;
   numberOfElements: number;
+};
+
+export type AuthUser = {
+  id: number;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  language: "pt" | "en";
+  theme: "light" | "dark";
+  sidebarVisible: boolean;
+};
+
+export type AuthResponse = {
+  user: AuthUser;
 };

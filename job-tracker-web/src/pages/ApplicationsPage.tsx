@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Application, ApplicationStatus } from "../lib/types";
 import { useSearch } from "../context/SearchContext";
 import { useTranslation, type Translations } from "../context/UserContext";
+import { buildAuthJsonHeaders, notifyUnauthorizedFromStatus } from "../lib/auth";
 
 type PageResponse<T> = {
   content: T[];
@@ -302,13 +303,12 @@ function getErrorMessage(error: unknown, fallback: string) {
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
+    credentials: "include",
+    headers: buildAuthJsonHeaders(init?.headers),
   });
 
   if (!res.ok) {
+    notifyUnauthorizedFromStatus(res.status);
     let msg = `HTTP error ${res.status}`;
     try {
       const ct = res.headers.get("content-type") || "";
@@ -549,6 +549,9 @@ export function ApplicationsPage() {
         role: payload.role.trim(),
         status: payload.status,
         appliedDate: payload.appliedDate,
+        notes: payload.notes || null,
+        jobUrl: payload.jobUrl || null,
+        salary: payload.salary || null,
       };
 
       await createApplication(cleanPayload);
@@ -579,6 +582,9 @@ export function ApplicationsPage() {
         role: payload.role.trim(),
         status: payload.status,
         appliedDate: payload.appliedDate,
+        notes: payload.notes || null,
+        jobUrl: payload.jobUrl || null,
+        salary: payload.salary || null,
       };
 
       await updateApplication(appId, cleanPayload);
@@ -836,18 +842,48 @@ export function ApplicationsPage() {
                       <CompanyLogo company={a.company} />
                       <div className="font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] truncate">{a.company}</div>
                     </div>
-                    <button
-                      onClick={() => setOpenStatusFor(a)}
-                      className={`text-xs px-2 py-1 rounded-full ${STATUS_COLOR[a.status]} hover:brightness-95`}
-                      title={t.applications_change_status}
-                    >
-                      {statusLabels[a.status]}
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {a.jobUrl && (
+                        <a
+                          href={a.jobUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1.5 rounded-md text-[#0071e3] hover:bg-[#0071e3]/10 transition-colors"
+                          title={t.open_job_link}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                          </svg>
+                        </a>
+                      )}
+                      <button
+                        onClick={() => setOpenStatusFor(a)}
+                        className={`text-xs px-2 py-1 rounded-full ${STATUS_COLOR[a.status]} hover:brightness-95`}
+                        title={t.applications_change_status}
+                      >
+                        {statusLabels[a.status]}
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="mt-3 text-lg font-semibold text-[#1e1e1e] dark:text-[#f5f5f7]">{a.role}</div>
+                  <div className="mt-3 text-lg font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] leading-tight">{a.role}</div>
 
-                  <div className="mt-4 text-sm text-[#6e6e73] dark:text-[#98989d]">
+                  {a.salary && (
+                    <div className="mt-2">
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-[#30d158]/15 text-[#1a8a3a] dark:bg-[#30d158]/20 dark:text-[#30d158] font-medium">
+                        💰 {a.salary}
+                      </span>
+                    </div>
+                  )}
+
+                  {a.notes && (
+                    <div className="mt-2 text-sm text-[#6e6e73] dark:text-[#98989d] line-clamp-2">
+                      {a.notes}
+                    </div>
+                  )}
+
+                  <div className="mt-3 text-sm text-[#6e6e73] dark:text-[#98989d]">
                     {t.applications_applied_on}{" "}
                     <span className="font-medium text-[#1e1e1e] dark:text-[#f5f5f7]">
                       {a.appliedDate ? formatDateBR(a.appliedDate) : "—"}
@@ -924,6 +960,9 @@ export function ApplicationsPage() {
               role: "",
               status: "APPLIED",
               appliedDate: todayISO(),
+              notes: "",
+              jobUrl: "",
+              salary: "",
             }}
             onCancel={() => setOpenCreate(false)}
             onSubmit={(payload) => onCreate(payload)}
@@ -943,6 +982,9 @@ export function ApplicationsPage() {
               role: openEditFor.role ?? "",
               status: openEditFor.status,
               appliedDate: safeISODate(openEditFor.appliedDate),
+              notes: openEditFor.notes ?? "",
+              jobUrl: openEditFor.jobUrl ?? "",
+              salary: openEditFor.salary ?? "",
             }}
             onCancel={() => setOpenEditFor(null)}
             onSubmit={(payload) => onEdit(openEditFor.id, payload)}
@@ -1138,6 +1180,16 @@ function Modal({
   );
 }
 
+type FormInitial = {
+  company: string;
+  role: string;
+  status: ApplicationStatus;
+  appliedDate: string;
+  notes?: string;
+  jobUrl?: string;
+  salary?: string;
+};
+
 function ApplicationForm({
   busy,
   initial,
@@ -1146,7 +1198,7 @@ function ApplicationForm({
   labels,
 }: {
   busy: boolean;
-  initial: { company: string; role: string; status: ApplicationStatus; appliedDate: string };
+  initial: FormInitial;
   onCancel: () => void;
   onSubmit: (payload: Omit<Application, "id">) => void;
   labels: Translations;
@@ -1155,6 +1207,9 @@ function ApplicationForm({
   const [role, setRole] = useState(initial.role);
   const [status, setStatus] = useState<ApplicationStatus>(initial.status);
   const [appliedDate, setAppliedDate] = useState<string>(safeISODate(initial.appliedDate));
+  const [notes, setNotes] = useState(initial.notes ?? "");
+  const [jobUrl, setJobUrl] = useState(initial.jobUrl ?? "");
+  const [salary, setSalary] = useState(initial.salary ?? "");
 
   const canSave =
     company.trim().length > 0 && role.trim().length > 0 && appliedDate.trim().length > 0;
@@ -1177,6 +1232,9 @@ function ApplicationForm({
           role: role.trim(),
           status,
           appliedDate,
+          notes: notes.trim() || null,
+          jobUrl: jobUrl.trim() || null,
+          salary: salary.trim() || null,
         });
       }}
     >
@@ -1185,7 +1243,7 @@ function ApplicationForm({
           <input
             value={company}
             onChange={(e) => setCompany(e.target.value)}
-            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20"
+            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7]"
             placeholder="Ex: Amazon"
             required
           />
@@ -1195,7 +1253,7 @@ function ApplicationForm({
           <input
             value={role}
             onChange={(e) => setRole(e.target.value)}
-            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20"
+            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7]"
             placeholder="Ex: Backend Intern"
             required
           />
@@ -1205,7 +1263,7 @@ function ApplicationForm({
           <select
             value={status}
             onChange={(e) => setStatus(e.target.value as ApplicationStatus)}
-            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#2c2c2e]"
+            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7]"
           >
             {formStatusOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -1220,10 +1278,39 @@ function ApplicationForm({
             type="date"
             value={appliedDate}
             onChange={(e) => setAppliedDate(e.target.value)}
-            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20"
+            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7]"
+          />
+        </Field>
+
+        <Field label={labels.salary}>
+          <input
+            value={salary}
+            onChange={(e) => setSalary(e.target.value)}
+            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7] placeholder:text-[#6e6e73] dark:placeholder:text-[#98989d]"
+            placeholder={labels.salary_placeholder}
+          />
+        </Field>
+
+        <Field label={labels.job_url}>
+          <input
+            value={jobUrl}
+            onChange={(e) => setJobUrl(e.target.value)}
+            type="url"
+            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7] placeholder:text-[#6e6e73] dark:placeholder:text-[#98989d]"
+            placeholder={labels.job_url_placeholder}
           />
         </Field>
       </div>
+
+      <Field label={labels.notes}>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={3}
+          className="w-full rounded-md border border-black/10 dark:border-white/10 px-3 py-2 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7] placeholder:text-[#6e6e73] dark:placeholder:text-[#98989d] resize-none"
+          placeholder={labels.notes_placeholder}
+        />
+      </Field>
 
       <div className="flex items-center justify-end gap-2 pt-2">
         <button

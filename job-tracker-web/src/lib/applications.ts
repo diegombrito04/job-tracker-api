@@ -1,4 +1,5 @@
 import type { Application, ApplicationStatus, PageResponse } from "./types";
+import { buildAuthJsonHeaders, notifyUnauthorizedFromStatus } from "./auth";
 
 const BASE_URL =
   import.meta.env.VITE_API_URL || "http://localhost:8080";
@@ -13,13 +14,12 @@ type ListParams = {
 async function http<T>(input: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${input}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
+    credentials: "include",
+    headers: buildAuthJsonHeaders(init?.headers),
   });
 
   if (!res.ok) {
+    notifyUnauthorizedFromStatus(res.status);
     const text = await res.text().catch(() => "");
     throw new Error(text || `Erro HTTP ${res.status}`);
   }

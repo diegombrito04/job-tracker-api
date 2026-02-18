@@ -12,13 +12,28 @@ export function SettingsPage() {
   const [avatarUrl, setAvatarUrl] = useState(profile.avatarUrl);
   const [saved, setSaved] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function handleSaveProfile() {
-    const trimmedName = name.trim() || "Usuário";
-    updateProfile({ name: trimmedName, avatarUrl: avatarUrl.trim() });
+  async function handleSaveProfile() {
+    const trimmedName = name.trim() || (profile.language === "pt" ? "Usuário" : "User");
+    setBusy(true);
+    setError(null);
+    await updateProfile({ name: trimmedName, avatarUrl: avatarUrl.trim() })
+      .then(() => {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.message) {
+          setError(err.message);
+          return;
+        }
+        setError(t.error);
+      })
+      .finally(() => setBusy(false));
+
     setImgError(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
   }
 
   function getInitials(n: string) {
@@ -86,6 +101,7 @@ export function SettingsPage() {
           <div className="flex justify-end pt-1">
             <button
               onClick={handleSaveProfile}
+              disabled={busy}
               className="h-10 px-4 rounded-md bg-[#0071e3] text-white text-sm font-medium hover:brightness-95 flex items-center gap-2 transition-all"
             >
               {saved ? (
@@ -98,6 +114,7 @@ export function SettingsPage() {
               )}
             </button>
           </div>
+          {error && <div className="text-sm text-[#ff3b30]">{error}</div>}
         </div>
       </Section>
 
@@ -126,13 +143,13 @@ export function SettingsPage() {
             label="Português"
             flag="🇧🇷"
             active={profile.language === "pt"}
-            onClick={() => updateProfile({ language: "pt" })}
+            onClick={() => void updateProfile({ language: "pt" })}
           />
           <LangOption
             label="English"
             flag="🇺🇸"
             active={profile.language === "en"}
-            onClick={() => updateProfile({ language: "en" })}
+            onClick={() => void updateProfile({ language: "en" })}
           />
         </div>
       </Section>

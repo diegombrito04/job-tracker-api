@@ -1,66 +1,108 @@
 # Job Tracker (API + Web)
 
-Aplicação fullstack para registrar e acompanhar candidaturas de emprego.
-
-## Visão Geral
-
-Este repositório contém:
-- `job-tracker-api` (raiz): backend REST em Spring Boot
-- `job-tracker-web`: frontend em React + TypeScript + Vite
-
-Funcionalidades principais:
-- CRUD de candidaturas (`company`, `role`, `status`, `appliedDate`)
-- Filtro por status, busca e paginação
-- Dashboard e estatísticas de conversão
-- Tema claro/escuro
-- Internacionalização (PT/EN)
+Aplicação fullstack para registrar, organizar e acompanhar candidaturas de emprego.
 
 ## Stack
 
-Backend:
-- Java 21
-- Spring Boot 3
-- Spring Web
-- Spring Validation
-- Spring Data JPA
-- Spring Security (config aberto para rotas da API no ambiente atual)
-- H2 Database (em memória)
-- SpringDoc OpenAPI (Swagger)
+- Backend: Spring Boot 3.5.9, Java 21, Maven
+- Frontend: React 19 + TypeScript + Vite + Tailwind v4
+- Auth: JWT assinado no backend + cookie `HttpOnly` (sem token no `localStorage`)
+- Banco: PostgreSQL (Docker/dev/prod) + H2 (execução local sem Docker e testes)
+- Migrations: Flyway
 
-Frontend:
-- React 19 + TypeScript
-- Vite
-- Tailwind CSS
-- React Router
+## Estrutura
 
-## Pré-requisitos
+- API: raiz do repositório
+- Web: `job-tracker-web/`
 
-- Java 21+
-- Node.js 20+ e npm
+## Executar 100% com Docker (recomendado)
 
-## Como Rodar Localmente
+### 1) Criar arquivo de ambiente
 
-### 1) Backend (porta 8080)
+```bash
+cp .env.example .env
+```
 
-Na raiz do projeto:
+### 2) Subir aplicação completa
+
+```bash
+docker compose up --build -d
+```
+
+### 3) Conferir status
+
+```bash
+docker compose ps
+```
+
+### 4) Acessos
+
+- Web: `http://localhost:5173`
+- API healthcheck: `http://localhost:8080/health`
+- Swagger: `http://localhost:8080/swagger-ui/index.html`
+
+## Comandos Docker (dia a dia)
+
+### Parar sem remover containers
+
+```bash
+docker compose stop
+```
+
+### Voltar a rodar rápido
+
+```bash
+docker compose start
+```
+
+### Parar e remover containers/rede
+
+```bash
+docker compose down
+```
+
+### Rebuild de backend/frontend
+
+```bash
+docker compose build backend frontend
+docker compose up -d
+```
+
+### Reset completo (apaga volume do banco)
+
+```bash
+docker compose down -v --remove-orphans
+docker compose up --build -d
+```
+
+### Logs
+
+```bash
+docker compose logs -f
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f postgres
+```
+
+### pgAdmin (opcional)
+
+```bash
+docker compose --profile tools up -d pgadmin
+```
+
+- URL: `http://localhost:5050`
+- Login padrão: `admin@jobtracker.local`
+- Senha padrão: `admin`
+
+## Desenvolvimento sem Docker (opcional)
+
+Backend com H2:
 
 ```bash
 ./mvnw spring-boot:run
 ```
 
-URLs úteis:
-- API: `http://localhost:8080`
-- Swagger UI: `http://localhost:8080/swagger-ui/index.html`
-- H2 Console: `http://localhost:8080/h2-console`
-
-Config H2 Console:
-- JDBC URL: `jdbc:h2:mem:jobtrackerdb`
-- User: `sa`
-- Password: vazio
-
-### 2) Frontend (porta 5173)
-
-Em outro terminal:
+Frontend:
 
 ```bash
 cd job-tracker-web
@@ -68,39 +110,8 @@ npm install
 npm run dev
 ```
 
-App Web:
-- `http://localhost:5173`
-
-## Scripts Úteis
-
-Backend (raiz):
+## Testes
 
 ```bash
 ./mvnw test
-./mvnw spring-boot:run
 ```
-
-Frontend (`job-tracker-web`):
-
-```bash
-npm run dev
-npm run lint
-npm run build
-npm run preview
-```
-
-## Endpoints da API
-
-- `GET /health`
-- `GET /applications`
-- `POST /applications`
-- `GET /applications/{id}`
-- `PUT /applications/{id}`
-- `PATCH /applications/{id}/status`
-- `DELETE /applications/{id}`
-
-Status possíveis:
-- `APPLIED`
-- `INTERVIEW`
-- `OFFER`
-- `REJECTED`

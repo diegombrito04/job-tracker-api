@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, type ReactNode } from "react";
+import { useUser } from "./UserContext";
 
 type Theme = "light" | "dark";
 
@@ -19,23 +20,19 @@ export function useTheme() {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    const stored = localStorage.getItem("theme");
-    if (stored === "dark" || stored === "light") return stored;
-    return "light";
-  });
+  const { profile, updateProfile } = useUser();
+  const theme: Theme = profile.theme;
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
-    localStorage.setItem("theme", theme);
   }, [theme]);
 
   function setTheme(t: Theme) {
-    setThemeState(t);
+    void updateProfile({ theme: t });
   }
 
   function toggleTheme() {
-    setThemeState((prev) => (prev === "light" ? "dark" : "light"));
+    void updateProfile({ theme: theme === "light" ? "dark" : "light" });
   }
 
   return (

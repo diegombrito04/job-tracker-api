@@ -1,52 +1,75 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { useAuth } from "./AuthContext";
+import { apiFetch } from "../lib/apiClient";
+import type { AuthUser } from "../lib/types";
 
 export type Language = "pt" | "en";
 
 export type UserProfile = {
   name: string;
+  email: string;
   avatarUrl: string;
   language: Language;
+  theme: "light" | "dark";
+  sidebarVisible: boolean;
 };
 
 type UserContextType = {
   profile: UserProfile;
-  updateProfile: (updates: Partial<UserProfile>) => void;
+  updateProfile: (updates: Partial<UserProfile>) => Promise<void>;
 };
 
 const defaultProfile: UserProfile = {
   name: "Usuário",
+  email: "",
   avatarUrl: "",
   language: "pt",
+  theme: "light",
+  sidebarVisible: true,
 };
-
-function loadProfile(): UserProfile {
-  try {
-    const stored = localStorage.getItem("userProfile");
-    if (stored) return { ...defaultProfile, ...JSON.parse(stored) };
-  } catch {
-    return defaultProfile;
-  }
-  return defaultProfile;
-}
 
 const UserContext = createContext<UserContextType>({
   profile: defaultProfile,
-  updateProfile: () => {},
+  updateProfile: async () => {},
 });
 
 export function useUser() {
   return useContext(UserContext);
 }
 
-export function UserProvider({ children }: { children: ReactNode }) {
-  const [profile, setProfile] = useState<UserProfile>(loadProfile);
+function toProfile(user: AuthUser | null): UserProfile {
+  if (!user) return defaultProfile;
+  return {
+    name: user.name || defaultProfile.name,
+    email: user.email || "",
+    avatarUrl: user.avatarUrl ?? "",
+    language: user.language === "en" ? "en" : "pt",
+    theme: user.theme === "dark" ? "dark" : "light",
+    sidebarVisible: user.sidebarVisible !== false,
+  };
+}
 
-  function updateProfile(updates: Partial<UserProfile>) {
-    setProfile((prev) => {
-      const next = { ...prev, ...updates };
-      localStorage.setItem("userProfile", JSON.stringify(next));
-      return next;
+export function UserProvider({ children }: { children: ReactNode }) {
+  const { user, setAuthenticatedUser } = useAuth();
+  const profile = useMemo(() => toProfile(user), [user]);
+
+  async function updateProfile(updates: Partial<UserProfile>) {
+    if (!user) return;
+
+    const payload = {
+      name: updates.name,
+      avatarUrl: updates.avatarUrl,
+      language: updates.language,
+      theme: updates.theme,
+      sidebarVisible: updates.sidebarVisible,
+    };
+
+    const nextUser = await apiFetch<AuthUser>("/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     });
+
+    setAuthenticatedUser(nextUser);
   }
 
   return (
@@ -93,6 +116,23 @@ export const translations = {
     profile_menu: "Perfil",
     show_sidebar: "Mostrar menu lateral",
     hide_sidebar: "Esconder menu lateral",
+    logout: "Sair",
+    auth_login_title: "Entrar",
+    auth_login_subtitle: "Acesse sua conta para continuar.",
+    auth_register_title: "Criar conta",
+    auth_register_subtitle: "Comece a acompanhar suas candidaturas.",
+    auth_name_placeholder: "Seu nome",
+    auth_email: "E-mail",
+    auth_password: "Senha",
+    auth_login_button: "Entrar",
+    auth_register_button: "Criar conta",
+    auth_login_loading: "Entrando...",
+    auth_register_loading: "Criando conta...",
+    auth_no_account: "Ainda não tem conta?",
+    auth_have_account: "Já tem conta?",
+    auth_switch_to_register: "Criar agora",
+    auth_switch_to_login: "Entrar",
+    auth_generic_error: "Não foi possível autenticar.",
     status_applied: "Aplicada",
     status_interview: "Entrevista",
     status_offer: "Oferta",
@@ -178,6 +218,14 @@ export const translations = {
     applications_error_retry: "Tente novamente.",
     applications_error_api_hint:
       "Confere se a API está rodando em localhost:8080 e se o CORS está liberado para localhost:5173.",
+    // Campos novos (Sprint 2)
+    notes: "Observações",
+    notes_placeholder: "Notas, próximos passos, contatos...",
+    job_url: "Link da vaga",
+    job_url_placeholder: "https://linkedin.com/jobs/...",
+    salary: "Salário / Faixa",
+    salary_placeholder: "Ex: R$ 5.000–8.000",
+    open_job_link: "Abrir vaga",
   },
   en: {
     dashboard: "Dashboard",
@@ -213,6 +261,23 @@ export const translations = {
     profile_menu: "Profile",
     show_sidebar: "Show sidebar",
     hide_sidebar: "Hide sidebar",
+    logout: "Logout",
+    auth_login_title: "Sign in",
+    auth_login_subtitle: "Access your account to continue.",
+    auth_register_title: "Create account",
+    auth_register_subtitle: "Start tracking your job applications.",
+    auth_name_placeholder: "Your name",
+    auth_email: "Email",
+    auth_password: "Password",
+    auth_login_button: "Sign in",
+    auth_register_button: "Create account",
+    auth_login_loading: "Signing in...",
+    auth_register_loading: "Creating account...",
+    auth_no_account: "Don't have an account yet?",
+    auth_have_account: "Already have an account?",
+    auth_switch_to_register: "Create one",
+    auth_switch_to_login: "Sign in",
+    auth_generic_error: "Could not authenticate.",
     status_applied: "Applied",
     status_interview: "Interview",
     status_offer: "Offer",
@@ -298,6 +363,14 @@ export const translations = {
     applications_error_retry: "Please try again.",
     applications_error_api_hint:
       "Make sure the API is running on localhost:8080 and CORS is enabled for localhost:5173.",
+    // New fields (Sprint 2)
+    notes: "Notes",
+    notes_placeholder: "Notes, next steps, contacts...",
+    job_url: "Job URL",
+    job_url_placeholder: "https://linkedin.com/jobs/...",
+    salary: "Salary / Range",
+    salary_placeholder: "Ex: $80k–100k",
+    open_job_link: "Open job link",
   },
 } as const;
 

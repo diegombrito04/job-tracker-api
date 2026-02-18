@@ -1,6 +1,6 @@
 # Job Tracker Web
 
-Frontend do projeto Job Tracker.
+Frontend do Job Tracker.
 
 ## Stack
 
@@ -15,28 +15,40 @@ Frontend do projeto Job Tracker.
 - Node.js 20+
 - npm
 
-## Executar em desenvolvimento
+## Desenvolvimento local
 
 ```bash
 npm install
 npm run dev
 ```
 
-App:
-- `http://localhost:5173`
+- App: `http://localhost:5173`
+- API padrão (sem Docker): `http://localhost:8080`
 
-Por padrão, o frontend consome a API em `http://localhost:8080`.
+## Docker (pela raiz do repositório)
+
+```bash
+docker compose up --build -d
+```
+
+- Frontend: `http://localhost:5173`
+- O Nginx do frontend faz proxy de `/api` para o backend.
+
+## Autenticação
+
+- O frontend usa sessão por cookie `HttpOnly`.
+- Não armazena token JWT no `localStorage`.
+- Requisições autenticadas enviam `credentials: "include"`/`withCredentials: true`.
 
 ## Variáveis de ambiente
 
-Você pode configurar a URL da API com:
 - `VITE_API_URL`
-- ou `VITE_API_BASE_URL`
+- `VITE_API_BASE_URL`
 
-Exemplo em `.env`:
+Com Docker Compose, o valor recomendado é:
 
 ```env
-VITE_API_URL=http://localhost:8080
+VITE_API_URL=/api
 ```
 
 ## Scripts
