@@ -51,3 +51,23 @@ export async function fetchAllApplications(): Promise<Application[]> {
   );
   return data.content;
 }
+
+export async function fetchDueFollowUps(limit = 5): Promise<Application[]> {
+  const data = await apiFetch<PageResponse<Application>>(
+    `/applications?page=0&size=${limit}&sort=followUpDate,asc&followUpDue=true`
+  );
+  return data.content;
+}
+
+export async function fetchOverdueFollowUps(limit = 8): Promise<{
+  content: Application[];
+  totalElements: number;
+}> {
+  const data = await apiFetch<PageResponse<Application>>(
+    `/applications?page=0&size=${limit}&sort=followUpDate,asc&followUpOverdue=true`
+  );
+  return {
+    content: data.content,
+    totalElements: data.totalElements,
+  };
+}

@@ -5,6 +5,8 @@ import { useSearch } from "../context/SearchContext";
 import { useTheme } from "../context/ThemeContext";
 import { useTranslation, useUser } from "../context/UserContext";
 import { useAuth } from "../context/AuthContext";
+import type { Application } from "../lib/types";
+import { fetchOverdueFollowUps } from "../lib/apiClient";
 
 type Props = {
   onOpenSidebar: () => void;
@@ -12,6 +14,14 @@ type Props = {
   sidebarVisible: boolean;
   title: string;
 };
+
+function dueDateLabel(isoDate: string, language: "pt" | "en", t: ReturnType<typeof useTranslation>) {
+  const date = new Date(`${isoDate}T00:00:00`);
+  const formatted = new Intl.DateTimeFormat(language === "en" ? "en-US" : "pt-BR", {
+    dateStyle: "medium",
+  }).format(date);
+  return `${t.notifications_due_overdue} - ${formatted}`;
+}
 
 export function Topbar({ onOpenSidebar, onToggleSidebarVisibility, sidebarVisible, title }: Props) {
   const { query, setQuery } = useSearch();
@@ -24,19 +34,55 @@ export function Topbar({ onOpenSidebar, onToggleSidebarVisibility, sidebarVisibl
   const isApplicationsPage = location.pathname === "/applications";
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [overdueFollowUps, setOverdueFollowUps] = useState<Application[]>([]);
+  const [overdueTotal, setOverdueTotal] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
 
-  // Close dropdown on outside click
+  const overdueCount = overdueTotal;
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadOverdueFollowUps() {
+      try {
+        const data = await fetchOverdueFollowUps(8);
+        if (alive) {
+          setOverdueFollowUps(data.content);
+          setOverdueTotal(data.totalElements);
+        }
+      } catch {
+        if (alive) {
+          setOverdueFollowUps([]);
+          setOverdueTotal(0);
+        }
+      }
+    }
+
+    void loadOverdueFollowUps();
+    const interval = window.setInterval(() => void loadOverdueFollowUps(), 60000);
+
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, [location.pathname]);
+
+  // Close dropdowns on outside click
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
       }
+      if (notificationsRef.current && !notificationsRef.current.contains(e.target as Node)) {
+        setNotificationsOpen(false);
+      }
     }
-    if (dropdownOpen) document.addEventListener("mousedown", handleClickOutside);
+    if (dropdownOpen || notificationsOpen) document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [dropdownOpen]);
+  }, [dropdownOpen, notificationsOpen]);
 
   function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Escape") {
@@ -122,13 +168,81 @@ export function Topbar({ onOpenSidebar, onToggleSidebarVisibility, sidebarVisibl
           )}
         </div>
 
+        {/* Follow-up banner */}
+        {overdueCount > 0 && (
+          <button
+            onClick={() => {
+              setNotificationsOpen(true);
+              navigate("/applications?overdue=1");
+            }}
+            className="hidden md:inline-flex h-8 items-center rounded-full bg-[#ff9500]/15 text-[#a75c00] dark:text-[#ffb24d] px-3 text-xs font-medium"
+          >
+            {t.notifications_due_banner(overdueCount)}
+          </button>
+        )}
+
         {/* Bell */}
-        <button
-          className="p-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5"
-          aria-label={t.notifications}
-        >
-          <Bell className="w-5 h-5 text-[#6e6e73] dark:text-[#98989d]" />
-        </button>
+        <div className="relative" ref={notificationsRef}>
+          <button
+            className="p-2 rounded-md hover:bg-black/5 dark:hover:bg-white/5 relative"
+            aria-label={t.notifications}
+            onClick={() => setNotificationsOpen((open) => !open)}
+          >
+            <Bell className="w-5 h-5 text-[#6e6e73] dark:text-[#98989d]" />
+            {overdueCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-[#ff3b30] text-white text-[10px] leading-4 text-center">
+                {overdueCount > 99 ? "99+" : overdueCount}
+              </span>
+            )}
+          </button>
+
+          {notificationsOpen && (
+            <div className="absolute right-0 top-11 w-[320px] bg-white dark:bg-[#2c2c2e] rounded-xl shadow-[0_8px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.5)] border border-black/5 dark:border-white/10 overflow-hidden z-50">
+              <div className="px-4 py-3 border-b border-black/5 dark:border-white/5 flex items-center justify-between">
+                <div className="font-semibold text-sm text-[#1e1e1e] dark:text-[#f5f5f7]">
+                  {t.notifications_due_title}
+                </div>
+                <button
+                  onClick={() => {
+                    setNotificationsOpen(false);
+                    navigate("/applications?overdue=1");
+                  }}
+                  className="text-xs text-[#0071e3] hover:underline"
+                >
+                  {t.see_all}
+                </button>
+              </div>
+
+              {overdueCount === 0 ? (
+                <div className="px-4 py-4 text-sm text-[#6e6e73] dark:text-[#98989d]">
+                  {t.notifications_due_empty}
+                </div>
+              ) : (
+                <div className="max-h-[320px] overflow-y-auto">
+                  {overdueFollowUps.map((app) => (
+                    <button
+                      key={app.id}
+                      onClick={() => {
+                        setNotificationsOpen(false);
+                        navigate("/applications?overdue=1");
+                      }}
+                      className="w-full text-left px-4 py-3 border-b border-black/5 dark:border-white/5 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    >
+                      <div className="text-sm font-medium text-[#1e1e1e] dark:text-[#f5f5f7] truncate">
+                        {app.company} - {app.role}
+                      </div>
+                      {app.followUpDate && (
+                        <div className="text-xs text-[#6e6e73] dark:text-[#98989d] mt-1">
+                          {dueDateLabel(app.followUpDate, profile.language, t)}
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Avatar / Profile dropdown */}
         <div className="relative" ref={dropdownRef}>

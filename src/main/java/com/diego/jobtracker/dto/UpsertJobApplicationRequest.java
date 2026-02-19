@@ -2,6 +2,7 @@
 package com.diego.jobtracker.dto;
 
 import com.diego.jobtracker.model.ApplicationStatus;
+import com.diego.jobtracker.model.ApplicationPriority;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
@@ -17,7 +18,11 @@ public record UpsertJobApplicationRequest(
         @NotNull(message = "status is required")
         ApplicationStatus status,
 
+        ApplicationPriority priority,
+
         LocalDate appliedDate,
+
+        LocalDate followUpDate,
 
         String notes,
 

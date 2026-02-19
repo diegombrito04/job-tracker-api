@@ -1,7 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { Application, ApplicationStatus } from "../lib/types";
+import { useLocation } from "react-router-dom";
+import type {
+  Application,
+  ApplicationPriority,
+  ApplicationStatus,
+  StatusHistoryEntry,
+} from "../lib/types";
 import { useSearch } from "../context/SearchContext";
-import { useTranslation, type Translations } from "../context/UserContext";
+import { useTranslation, useUser, type Translations } from "../context/UserContext";
 import { buildAuthJsonHeaders, notifyUnauthorizedFromStatus } from "../lib/auth";
 
 type PageResponse<T> = {
@@ -16,7 +22,14 @@ type PageResponse<T> = {
   empty: boolean;
 };
 
-type SortOption = "appliedDate,desc" | "appliedDate,asc" | "company,asc";
+type SortOption =
+  | "appliedDate,desc"
+  | "appliedDate,asc"
+  | "company,asc"
+  | "priority,desc"
+  | "followUpDate,asc";
+
+type ViewMode = "grid" | "kanban";
 
 // ✅ Compatível com VITE_API_URL e VITE_API_BASE_URL (pra não quebrar nada)
 const API_BASE =
@@ -29,6 +42,12 @@ const STATUS_COLOR: Record<ApplicationStatus, string> = {
   INTERVIEW: "bg-[#ff9500] text-white",
   OFFER: "bg-[#30d158] text-white",
   REJECTED: "bg-[#ff3b30] text-white",
+};
+
+const PRIORITY_COLOR: Record<ApplicationPriority, string> = {
+  HIGH: "bg-[#ff3b30]/15 text-[#ff3b30]",
+  MEDIUM: "bg-[#ff9500]/15 text-[#d97b00]",
+  LOW: "bg-[#34c759]/15 text-[#1f8f46]",
 };
 
 const COMPANY_DOMAIN_BY_NAME: Record<string, string> = {
@@ -281,6 +300,32 @@ function formatDateBR(isoYYYYMMDD: string) {
   return `${dd}/${mm}/${y}`;
 }
 
+function compareDateOnly(isoDate: string): number {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(isoDate);
+  target.setHours(0, 0, 0, 0);
+  return target.getTime() - today.getTime();
+}
+
+function getFollowUpKind(followUpDate?: string | null): "overdue" | "today" | "future" | null {
+  if (!followUpDate) return null;
+  const delta = compareDateOnly(followUpDate);
+  if (delta < 0) return "overdue";
+  if (delta === 0) return "today";
+  return "future";
+}
+
+function formatDateTimeLocalized(isoDateTime: string, language: "pt" | "en") {
+  const date = new Date(isoDateTime);
+  if (Number.isNaN(date.getTime())) return isoDateTime;
+
+  return new Intl.DateTimeFormat(language === "en" ? "en-US" : "pt-BR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
 function todayISO() {
   const now = new Date();
   const y = now.getFullYear();
@@ -297,6 +342,189 @@ function safeISODate(value: unknown): string {
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) return error.message;
   return fallback;
+}
+
+function csvCell(value: unknown): string {
+  const raw = value == null ? "" : String(value);
+  if (!/[",\n\r]/.test(raw)) return raw;
+  return `"${raw.replace(/"/g, "\"\"")}"`;
+}
+
+function toApplicationsCsv(apps: Application[]): string {
+  const header = [
+    "company",
+    "role",
+    "status",
+    "priority",
+    "appliedDate",
+    "followUpDate",
+    "salary",
+    "jobUrl",
+    "notes",
+  ];
+
+  const lines = apps.map((app) =>
+    [
+      app.company ?? "",
+      app.role ?? "",
+      app.status ?? "APPLIED",
+      app.priority ?? "MEDIUM",
+      app.appliedDate ?? "",
+      app.followUpDate ?? "",
+      app.salary ?? "",
+      app.jobUrl ?? "",
+      app.notes ?? "",
+    ]
+      .map(csvCell)
+      .join(",")
+  );
+
+  return [header.join(","), ...lines].join("\n");
+}
+
+type JsonBackupPayload = {
+  version: number;
+  exportedAt: string;
+  applications: Array<{
+    company: string;
+    role: string;
+    status: ApplicationStatus;
+    priority: ApplicationPriority;
+    appliedDate: string;
+    followUpDate: string | null;
+    salary: string | null;
+    jobUrl: string | null;
+    notes: string | null;
+  }>;
+};
+
+function toApplicationsJsonBackup(apps: Application[]): string {
+  const payload: JsonBackupPayload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    applications: apps.map((app) => ({
+      company: app.company ?? "",
+      role: app.role ?? "",
+      status: app.status ?? "APPLIED",
+      priority: app.priority ?? "MEDIUM",
+      appliedDate: app.appliedDate ?? todayISO(),
+      followUpDate: app.followUpDate ?? null,
+      salary: app.salary ?? null,
+      jobUrl: app.jobUrl ?? null,
+      notes: app.notes ?? null,
+    })),
+  };
+
+  return JSON.stringify(payload, null, 2);
+}
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (inQuotes) {
+      if (char === "\"") {
+        if (text[i + 1] === "\"") {
+          field += "\"";
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += char;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inQuotes = true;
+      continue;
+    }
+
+    if (char === ",") {
+      row.push(field);
+      field = "";
+      continue;
+    }
+
+    if (char === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+      continue;
+    }
+
+    if (char === "\r") continue;
+    field += char;
+  }
+
+  row.push(field);
+  rows.push(row);
+
+  return rows.filter((r) => r.some((cell) => cell.trim() !== ""));
+}
+
+function normalizeStatusValue(value: string): ApplicationStatus | null {
+  const normalized = value.trim().toUpperCase();
+  const map: Record<string, ApplicationStatus> = {
+    APPLIED: "APPLIED",
+    APLICADA: "APPLIED",
+    INTERVIEW: "INTERVIEW",
+    ENTREVISTA: "INTERVIEW",
+    OFFER: "OFFER",
+    OFERTA: "OFFER",
+    REJECTED: "REJECTED",
+    REJEITADA: "REJECTED",
+  };
+  return map[normalized] ?? null;
+}
+
+function normalizePriorityValue(value: string): ApplicationPriority {
+  const normalized = value.trim().toUpperCase();
+  const map: Record<string, ApplicationPriority> = {
+    HIGH: "HIGH",
+    ALTA: "HIGH",
+    MEDIUM: "MEDIUM",
+    MEDIA: "MEDIUM",
+    "MÉDIA": "MEDIUM",
+    LOW: "LOW",
+    BAIXA: "LOW",
+  };
+  return map[normalized] ?? "MEDIUM";
+}
+
+function normalizeDateValue(value: string): string | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const brMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (brMatch) {
+    const [, dd, mm, yyyy] = brMatch;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  return null;
+}
+
+function normalizeStatusFromUnknown(value: unknown): ApplicationStatus | null {
+  if (typeof value !== "string") return null;
+  return normalizeStatusValue(value);
+}
+
+function normalizePriorityFromUnknown(value: unknown): ApplicationPriority {
+  if (typeof value !== "string") return "MEDIUM";
+  return normalizePriorityValue(value);
+}
+
+function normalizeStringFromUnknown(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 // ✅ Melhor erro: tenta ler texto quando não for JSON (pra não ficar só "Failed to fetch")
@@ -340,12 +568,16 @@ async function listApplications(params: {
   size: number;
   sort: string; // e.g. "appliedDate,desc"
   status?: ApplicationStatus;
+  followUpDue?: boolean;
+  followUpOverdue?: boolean;
 }): Promise<PageResponse<Application>> {
   const qs = new URLSearchParams();
   qs.set("page", String(params.page));
   qs.set("size", String(params.size));
   qs.set("sort", params.sort);
   if (params.status) qs.set("status", params.status);
+  if (params.followUpDue) qs.set("followUpDue", "true");
+  if (params.followUpOverdue) qs.set("followUpOverdue", "true");
 
   return api<PageResponse<Application>>(`/applications?${qs.toString()}`);
 }
@@ -376,6 +608,10 @@ async function patchStatus(id: number, status: ApplicationStatus): Promise<Appli
   });
 }
 
+async function listStatusHistory(id: number): Promise<StatusHistoryEntry[]> {
+  return api<StatusHistoryEntry[]>(`/applications/${id}/history`);
+}
+
 /** Toasts */
 type Toast = { id: string; type: "success" | "error" | "info"; title: string; message?: string };
 function toastColors(t: Toast["type"]) {
@@ -385,14 +621,26 @@ function toastColors(t: Toast["type"]) {
 }
 
 export function ApplicationsPage() {
+  const location = useLocation();
   const t = useTranslation();
+  const { profile } = useUser();
+  const initialDueOnly = useMemo(
+    () => new URLSearchParams(location.search).get("due") === "1",
+    [location.search]
+  );
+  const initialOverdueOnly = useMemo(
+    () => new URLSearchParams(location.search).get("overdue") === "1",
+    [location.search]
+  );
   const [statusFilter, setStatusFilter] = useState<ApplicationStatus | "ALL">("ALL");
 
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [apps, setApps] = useState<Application[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [hasAnyApplications, setHasAnyApplications] = useState(false);
+  const hasLoadedOnceRef = useRef(false);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -400,6 +648,9 @@ export function ApplicationsPage() {
   const [size] = useState(12);
 
   const [sort, setSort] = useState<SortOption>("appliedDate,desc");
+  const [followUpDueOnly, setFollowUpDueOnly] = useState(initialDueOnly);
+  const [followUpOverdueOnly, setFollowUpOverdueOnly] = useState(initialOverdueOnly);
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
 
   const { query: search, setQuery: setSearch } = useSearch();
   const statusLabels: Record<ApplicationStatus, string> = useMemo(
@@ -408,6 +659,14 @@ export function ApplicationsPage() {
       INTERVIEW: t.status_interview,
       OFFER: t.status_offer,
       REJECTED: t.status_rejected,
+    }),
+    [t]
+  );
+  const priorityLabels: Record<ApplicationPriority, string> = useMemo(
+    () => ({
+      LOW: t.priority_low,
+      MEDIUM: t.priority_medium,
+      HIGH: t.priority_high,
     }),
     [t]
   );
@@ -429,7 +688,17 @@ export function ApplicationsPage() {
   const [openCreate, setOpenCreate] = useState(false);
   const [openEditFor, setOpenEditFor] = useState<Application | null>(null); // ✅ NOVO: editar
   const [openStatusFor, setOpenStatusFor] = useState<Application | null>(null);
+  const [openHistoryFor, setOpenHistoryFor] = useState<Application | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Application | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyItems, setHistoryItems] = useState<StatusHistoryEntry[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [isJsonExporting, setIsJsonExporting] = useState(false);
+  const [isJsonImporting, setIsJsonImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
+  const importJsonFileRef = useRef<HTMLInputElement | null>(null);
 
   const [busyAction, setBusyAction] = useState<number | null>(null);
 
@@ -440,16 +709,25 @@ export function ApplicationsPage() {
     window.setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 3000);
   };
 
+  useEffect(() => {
+    const dueFromUrl = new URLSearchParams(location.search).get("due") === "1";
+    const overdueFromUrl = new URLSearchParams(location.search).get("overdue") === "1";
+    setFollowUpDueOnly(dueFromUrl);
+    setFollowUpOverdueOnly(overdueFromUrl);
+  }, [location.search]);
+
   // Reset page when filters/sort change
   useEffect(() => {
     setPage(0);
-  }, [statusParam, sort]);
+  }, [statusParam, sort, followUpDueOnly, followUpOverdueOnly]);
 
   // Centralizei o reload pra não repetir lógica e evitar bugs
   async function reload(opts?: { pageOverride?: number }) {
     const targetPage = opts?.pageOverride ?? page;
+    const softLoad = hasLoadedOnceRef.current;
 
-    setLoading(true);
+    if (softLoad) setIsRefreshing(true);
+    else setLoading(true);
     setError(null);
 
     try {
@@ -459,6 +737,8 @@ export function ApplicationsPage() {
           size,
           sort,
           status: statusParam,
+          followUpDue: followUpDueOnly,
+          followUpOverdue: followUpOverdueOnly,
         }),
         listApplications({
           page: 0,
@@ -472,10 +752,12 @@ export function ApplicationsPage() {
       setTotalPages(data.totalPages);
       setHasAnyApplications(totalData.totalElements > 0);
       if (opts?.pageOverride !== undefined) setPage(targetPage);
+      hasLoadedOnceRef.current = true;
     } catch (error: unknown) {
       setError(getErrorMessage(error, t.applications_error_fetch));
     } finally {
-      setLoading(false);
+      if (softLoad) setIsRefreshing(false);
+      else setLoading(false);
     }
   }
 
@@ -484,17 +766,21 @@ export function ApplicationsPage() {
     let alive = true;
 
     async function load() {
-      setLoading(true);
+      const softLoad = hasLoadedOnceRef.current;
+      if (softLoad) setIsRefreshing(true);
+      else setLoading(true);
       setError(null);
 
       try {
         const [data, totalData] = await Promise.all([
-          listApplications({
-            page,
-            size,
-            sort,
-            status: statusParam,
-          }),
+        listApplications({
+          page,
+          size,
+          sort,
+          status: statusParam,
+          followUpDue: followUpDueOnly,
+          followUpOverdue: followUpOverdueOnly,
+        }),
           listApplications({
             page: 0,
             size: 1,
@@ -508,11 +794,15 @@ export function ApplicationsPage() {
         setTotal(data.totalElements);
         setTotalPages(data.totalPages);
         setHasAnyApplications(totalData.totalElements > 0);
+        hasLoadedOnceRef.current = true;
       } catch (error: unknown) {
         if (!alive) return;
         setError(getErrorMessage(error, t.applications_error_fetch));
       } finally {
-        if (alive) setLoading(false);
+        if (alive) {
+          if (softLoad) setIsRefreshing(false);
+          else setLoading(false);
+        }
       }
     }
 
@@ -520,7 +810,7 @@ export function ApplicationsPage() {
     return () => {
       alive = false;
     };
-  }, [page, size, sort, statusParam, t.applications_error_fetch]);
+  }, [page, size, sort, statusParam, followUpDueOnly, followUpOverdueOnly, t.applications_error_fetch]);
 
   const filteredApps = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -531,14 +821,36 @@ export function ApplicationsPage() {
       return company.includes(q) || role.includes(q);
     });
   }, [apps, search]);
-  const showFirstApplicationCta = !loading && !error && total === 0 && !hasAnyApplications;
+  const showFirstApplicationCta =
+    !loading && !isRefreshing && !error && total === 0 && !hasAnyApplications;
   const showNoResultsCard =
     !loading &&
+    !isRefreshing &&
     !error &&
     !showFirstApplicationCta &&
     (total === 0 || filteredApps.length === 0);
   const noResultsDescription =
     total === 0 ? t.applications_no_match_filters : t.applications_not_found_desc;
+  const kanbanColumns = useMemo<Array<{ status: ApplicationStatus; title: string }>>(
+    () => [
+      { status: "APPLIED", title: t.status_applied },
+      { status: "INTERVIEW", title: t.status_interview },
+      { status: "OFFER", title: t.status_offer },
+      { status: "REJECTED", title: t.status_rejected },
+    ],
+    [t.status_applied, t.status_interview, t.status_offer, t.status_rejected]
+  );
+  const kanbanByStatus = useMemo(
+    () =>
+      kanbanColumns.reduce<Record<ApplicationStatus, Application[]>>(
+        (acc, column) => {
+          acc[column.status] = filteredApps.filter((app) => app.status === column.status);
+          return acc;
+        },
+        { APPLIED: [], INTERVIEW: [], OFFER: [], REJECTED: [] }
+      ),
+    [filteredApps, kanbanColumns]
+  );
 
   async function onCreate(payload: Omit<Application, "id">) {
     try {
@@ -548,7 +860,9 @@ export function ApplicationsPage() {
         company: payload.company.trim(),
         role: payload.role.trim(),
         status: payload.status,
+        priority: payload.priority ?? "MEDIUM",
         appliedDate: payload.appliedDate,
+        followUpDate: payload.followUpDate || null,
         notes: payload.notes || null,
         jobUrl: payload.jobUrl || null,
         salary: payload.salary || null,
@@ -581,7 +895,9 @@ export function ApplicationsPage() {
         company: payload.company.trim(),
         role: payload.role.trim(),
         status: payload.status,
+        priority: payload.priority ?? "MEDIUM",
         appliedDate: payload.appliedDate,
+        followUpDate: payload.followUpDate || null,
         notes: payload.notes || null,
         jobUrl: payload.jobUrl || null,
         salary: payload.salary || null,
@@ -651,6 +967,319 @@ export function ApplicationsPage() {
     }
   }
 
+  async function onOpenHistory(app: Application) {
+    setOpenHistoryFor(app);
+    setHistoryLoading(true);
+    setHistoryError(null);
+    setHistoryItems([]);
+
+    try {
+      const history = await listStatusHistory(app.id);
+      setHistoryItems(history);
+    } catch (error: unknown) {
+      setHistoryError(getErrorMessage(error, t.applications_history_error));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function onDropStatus(app: Application, targetStatus: ApplicationStatus) {
+    if (app.status === targetStatus) return;
+    const previous = app.status;
+
+    setApps((prev) =>
+      prev.map((item) => (item.id === app.id ? { ...item, status: targetStatus } : item))
+    );
+
+    try {
+      setBusyAction(app.id);
+      await patchStatus(app.id, targetStatus);
+      pushToast({
+        type: "success",
+        title: t.applications_status_updated_title,
+        message: t.applications_status_updated_msg(statusLabels[targetStatus]),
+      });
+      await reload();
+    } catch (error: unknown) {
+      setApps((prev) => prev.map((item) => (item.id === app.id ? { ...item, status: previous } : item)));
+      pushToast({
+        type: "error",
+        title: t.applications_error_update_status,
+        message: getErrorMessage(error, t.applications_error_retry),
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function fetchAllForExport(): Promise<Application[]> {
+    const sizeForExport = 100;
+    let exportPage = 0;
+    let exportTotalPages = 1;
+    const all: Application[] = [];
+
+    while (exportPage < exportTotalPages) {
+      const data = await listApplications({
+        page: exportPage,
+        size: sizeForExport,
+        sort,
+        status: statusParam,
+        followUpDue: followUpDueOnly,
+        followUpOverdue: followUpOverdueOnly,
+      });
+      all.push(...data.content);
+      exportTotalPages = Math.max(data.totalPages, 1);
+      exportPage += 1;
+    }
+
+    const q = search.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((a) => {
+      const company = (a.company ?? "").toLowerCase();
+      const role = (a.role ?? "").toLowerCase();
+      return company.includes(q) || role.includes(q);
+    });
+  }
+
+  async function onExportCsv() {
+    setIsExporting(true);
+    try {
+      const all = await fetchAllForExport();
+      if (all.length === 0) {
+        pushToast({ type: "info", title: t.applications_export_empty });
+        return;
+      }
+
+      const csv = toApplicationsCsv(all);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `job-tracker-applications-${todayISO()}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+
+      pushToast({ type: "success", title: t.applications_export_success(all.length) });
+    } catch (error: unknown) {
+      pushToast({
+        type: "error",
+        title: t.applications_error_fetch,
+        message: getErrorMessage(error, t.applications_error_retry),
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  function onImportClick() {
+    importFileRef.current?.click();
+  }
+
+  function onImportJsonClick() {
+    importJsonFileRef.current?.click();
+  }
+
+  async function onImportCsvFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setIsImporting(true);
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
+      if (rows.length < 2) {
+        throw new Error(t.applications_import_file_invalid);
+      }
+
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const findHeaderIndex = (...names: string[]) =>
+        names.map((n) => header.indexOf(n)).find((idx) => idx >= 0) ?? -1;
+      const idx = {
+        company: findHeaderIndex("company", "empresa"),
+        role: findHeaderIndex("role", "vaga", "cargo"),
+        status: findHeaderIndex("status"),
+        priority: findHeaderIndex("priority", "prioridade"),
+        appliedDate: findHeaderIndex("applieddate", "applied_date", "data_aplicacao"),
+        followUpDate: findHeaderIndex("followupdate", "follow_up_date", "data_followup"),
+        salary: findHeaderIndex("salary", "salario"),
+        jobUrl: findHeaderIndex("joburl", "job_url", "url_vaga"),
+        notes: findHeaderIndex("notes", "observacoes", "observações"),
+      };
+
+      if (idx.company < 0 || idx.role < 0 || idx.status < 0) {
+        throw new Error(t.applications_import_file_invalid);
+      }
+
+      const toCreate: Omit<Application, "id">[] = [];
+      for (const row of rows.slice(1)) {
+        const company = (row[idx.company] ?? "").trim();
+        const role = (row[idx.role] ?? "").trim();
+        const status = normalizeStatusValue(row[idx.status] ?? "");
+        if (!company || !role || !status) continue;
+
+        const priority = normalizePriorityValue(row[idx.priority] ?? "");
+        const appliedDate = normalizeDateValue(row[idx.appliedDate] ?? "") ?? todayISO();
+        const followUpDate = normalizeDateValue(row[idx.followUpDate] ?? "");
+        const salary = (row[idx.salary] ?? "").trim();
+        const jobUrl = (row[idx.jobUrl] ?? "").trim();
+        const notes = row[idx.notes] ?? "";
+
+        toCreate.push({
+          company,
+          role,
+          status,
+          priority,
+          appliedDate,
+          followUpDate,
+          salary: salary || null,
+          jobUrl: jobUrl || null,
+          notes: notes.trim() || null,
+        });
+      }
+
+      if (toCreate.length === 0) {
+        throw new Error(t.applications_import_file_invalid);
+      }
+
+      let created = 0;
+      let skipped = 0;
+      for (const payload of toCreate) {
+        try {
+          await createApplication(payload);
+          created += 1;
+        } catch {
+          skipped += 1;
+        }
+      }
+
+      if (created > 0) await reload({ pageOverride: 0 });
+      pushToast({ type: "success", title: t.applications_import_success(created, skipped) });
+    } catch (error: unknown) {
+      pushToast({
+        type: "error",
+        title: t.applications_import_error,
+        message: getErrorMessage(error, t.applications_import_file_invalid),
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
+  async function onExportJson() {
+    setIsJsonExporting(true);
+    try {
+      const all = await fetchAllForExport();
+      if (all.length === 0) {
+        pushToast({ type: "info", title: t.applications_export_empty });
+        return;
+      }
+
+      const backup = toApplicationsJsonBackup(all);
+      const blob = new Blob([backup], { type: "application/json;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `job-tracker-backup-${todayISO()}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+
+      pushToast({ type: "success", title: t.applications_export_json_success(all.length) });
+    } catch (error: unknown) {
+      pushToast({
+        type: "error",
+        title: t.applications_error_fetch,
+        message: getErrorMessage(error, t.applications_error_retry),
+      });
+    } finally {
+      setIsJsonExporting(false);
+    }
+  }
+
+  async function onImportJsonFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setIsJsonImporting(true);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as unknown;
+
+      const rawApps = Array.isArray(parsed)
+        ? parsed
+        : typeof parsed === "object" && parsed !== null && Array.isArray((parsed as JsonBackupPayload).applications)
+          ? (parsed as JsonBackupPayload).applications
+          : null;
+
+      if (!rawApps || rawApps.length === 0) {
+        throw new Error(t.applications_import_json_invalid);
+      }
+
+      const payloads: Omit<Application, "id">[] = [];
+      for (const item of rawApps) {
+        if (typeof item !== "object" || item === null) continue;
+
+        const raw = item as Record<string, unknown>;
+        const company = normalizeStringFromUnknown(raw.company);
+        const role = normalizeStringFromUnknown(raw.role);
+        const status = normalizeStatusFromUnknown(raw.status);
+        if (!company || !role || !status) continue;
+
+        const appliedDate = normalizeDateValue(normalizeStringFromUnknown(raw.appliedDate)) ?? todayISO();
+        const followUpDate = normalizeDateValue(normalizeStringFromUnknown(raw.followUpDate));
+        const salary = normalizeStringFromUnknown(raw.salary);
+        const jobUrl = normalizeStringFromUnknown(raw.jobUrl);
+        const notes = normalizeStringFromUnknown(raw.notes);
+
+        payloads.push({
+          company,
+          role,
+          status,
+          priority: normalizePriorityFromUnknown(raw.priority),
+          appliedDate,
+          followUpDate,
+          salary: salary || null,
+          jobUrl: jobUrl || null,
+          notes: notes || null,
+        });
+      }
+
+      if (payloads.length === 0) {
+        throw new Error(t.applications_import_json_invalid);
+      }
+
+      let created = 0;
+      let skipped = 0;
+      for (const payload of payloads) {
+        try {
+          await createApplication(payload);
+          created += 1;
+        } catch {
+          skipped += 1;
+        }
+      }
+
+      if (created > 0) await reload({ pageOverride: 0 });
+      pushToast({
+        type: "success",
+        title: t.applications_import_json_success(created, skipped),
+      });
+    } catch (error: unknown) {
+      pushToast({
+        type: "error",
+        title: t.applications_import_json_error,
+        message: getErrorMessage(error, t.applications_import_json_invalid),
+      });
+    } finally {
+      setIsJsonImporting(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Toasts */}
@@ -678,42 +1307,164 @@ export function ApplicationsPage() {
             {t.applications_title}
           </h1>
           <p className="text-sm text-[#6e6e73] dark:text-[#98989d]">
-            {loading ? t.loading : t.applications_registered(total)}
+            {loading || isRefreshing ? t.loading : t.applications_registered(total)}
           </p>
         </div>
 
-        <button
-          onClick={() => setOpenCreate(true)}
-          className="h-10 px-4 rounded-md bg-[#0071e3] text-white text-sm font-medium hover:brightness-95"
-        >
-          + {t.new_application}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <input
+            ref={importFileRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(e) => void onImportCsvFile(e)}
+          />
+          <input
+            ref={importJsonFileRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => void onImportJsonFile(e)}
+          />
+
+          <button
+            onClick={() => void onExportCsv()}
+            disabled={isImporting || isExporting || isJsonExporting || isJsonImporting || loading}
+            className="h-10 px-4 rounded-md bg-white dark:bg-[#2c2c2e] border border-black/10 dark:border-white/10 text-[#1e1e1e] dark:text-[#f5f5f7] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-60 transition-all duration-200 active:scale-[0.98]"
+          >
+            {isExporting ? t.applications_exporting : t.applications_export_csv}
+          </button>
+
+          <button
+            onClick={onImportClick}
+            disabled={isImporting || isExporting || isJsonExporting || isJsonImporting || loading}
+            className="h-10 px-4 rounded-md bg-white dark:bg-[#2c2c2e] border border-black/10 dark:border-white/10 text-[#1e1e1e] dark:text-[#f5f5f7] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-60 transition-all duration-200 active:scale-[0.98]"
+          >
+            {isImporting ? t.applications_importing : t.applications_import_csv}
+          </button>
+
+          <button
+            onClick={() => void onExportJson()}
+            disabled={isImporting || isExporting || isJsonExporting || isJsonImporting || loading}
+            className="h-10 px-4 rounded-md bg-white dark:bg-[#2c2c2e] border border-black/10 dark:border-white/10 text-[#1e1e1e] dark:text-[#f5f5f7] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-60 transition-all duration-200 active:scale-[0.98]"
+          >
+            {isJsonExporting ? t.applications_exporting : t.applications_export_json}
+          </button>
+
+          <button
+            onClick={onImportJsonClick}
+            disabled={isImporting || isExporting || isJsonExporting || isJsonImporting || loading}
+            className="h-10 px-4 rounded-md bg-white dark:bg-[#2c2c2e] border border-black/10 dark:border-white/10 text-[#1e1e1e] dark:text-[#f5f5f7] text-sm font-medium hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-60 transition-all duration-200 active:scale-[0.98]"
+          >
+            {isJsonImporting ? t.applications_importing : t.applications_import_json}
+          </button>
+
+          <button
+            onClick={() => setOpenCreate(true)}
+            className="h-10 px-4 rounded-md bg-[#0071e3] text-white text-sm font-medium hover:brightness-95 transition-all duration-200 active:scale-[0.98]"
+          >
+            + {t.new_application}
+          </button>
+        </div>
       </div>
 
       {/* Filters row */}
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <FilterChip active={statusFilter === "ALL"} onClick={() => setStatusFilter("ALL")}>
+          <FilterChip
+            active={statusFilter === "ALL"}
+            onClick={() => setStatusFilter("ALL")}
+            disabled={isRefreshing}
+          >
             {t.applications_filter_all}
           </FilterChip>
-          <FilterChip active={statusFilter === "APPLIED"} onClick={() => setStatusFilter("APPLIED")}>
+          <FilterChip
+            active={statusFilter === "APPLIED"}
+            onClick={() => setStatusFilter("APPLIED")}
+            disabled={isRefreshing}
+          >
             {t.applied}
           </FilterChip>
           <FilterChip
             active={statusFilter === "INTERVIEW"}
             onClick={() => setStatusFilter("INTERVIEW")}
+            disabled={isRefreshing}
           >
             {t.interview}
           </FilterChip>
-          <FilterChip active={statusFilter === "OFFER"} onClick={() => setStatusFilter("OFFER")}>
+          <FilterChip
+            active={statusFilter === "OFFER"}
+            onClick={() => setStatusFilter("OFFER")}
+            disabled={isRefreshing}
+          >
             {t.offers}
           </FilterChip>
           <FilterChip
             active={statusFilter === "REJECTED"}
             onClick={() => setStatusFilter("REJECTED")}
+            disabled={isRefreshing}
           >
             {t.rejected}
           </FilterChip>
+          <FilterChip
+            active={followUpDueOnly}
+            onClick={() =>
+              setFollowUpDueOnly((prev) => {
+                const next = !prev;
+                if (next) setFollowUpOverdueOnly(false);
+                return next;
+              })
+            }
+            disabled={isRefreshing}
+          >
+            {t.applications_followup_due_only}
+          </FilterChip>
+          <FilterChip
+            active={followUpOverdueOnly}
+            onClick={() =>
+              setFollowUpOverdueOnly((prev) => {
+                const next = !prev;
+                if (next) setFollowUpDueOnly(false);
+                return next;
+              })
+            }
+            disabled={isRefreshing}
+          >
+            {t.applications_followup_overdue_only}
+          </FilterChip>
+          <div className="inline-flex rounded-md border border-black/10 dark:border-white/10 overflow-hidden">
+            <button
+              onClick={() => setViewMode("grid")}
+              className={[
+                "h-8 px-3 text-sm transition-colors",
+                viewMode === "grid"
+                  ? "bg-[#1e1e1e] text-white"
+                  : "bg-white dark:bg-[#2c2c2e] text-[#1e1e1e] dark:text-[#f5f5f7] hover:bg-black/5 dark:hover:bg-white/5",
+              ].join(" ")}
+            >
+              {t.applications_view_grid}
+            </button>
+            <button
+              onClick={() => setViewMode("kanban")}
+              className={[
+                "h-8 px-3 text-sm border-l border-black/10 dark:border-white/10 transition-colors",
+                viewMode === "kanban"
+                  ? "bg-[#1e1e1e] text-white"
+                  : "bg-white dark:bg-[#2c2c2e] text-[#1e1e1e] dark:text-[#f5f5f7] hover:bg-black/5 dark:hover:bg-white/5",
+              ].join(" ")}
+            >
+              {t.applications_view_kanban}
+            </button>
+          </div>
+          <div
+            className={[
+              "text-xs text-[#6e6e73] dark:text-[#98989d] transition-opacity duration-200",
+              isRefreshing ? "opacity-100" : "opacity-0",
+            ].join(" ")}
+            aria-live="polite"
+          >
+            {t.loading}...
+          </div>
         </div>
 
         <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
@@ -723,12 +1474,15 @@ export function ApplicationsPage() {
               <select
                 value={sort}
                 onChange={(e) => setSort(e.target.value as SortOption)}
+                disabled={isRefreshing}
                 className="text-sm outline-none bg-transparent text-[#1e1e1e] dark:text-[#f5f5f7]"
                 aria-label={t.applications_sort_by}
               >
                 <option value="appliedDate,desc">{t.applications_sort_date_desc}</option>
                 <option value="appliedDate,asc">{t.applications_sort_date_asc}</option>
                 <option value="company,asc">{t.applications_sort_company_asc}</option>
+                <option value="priority,desc">{t.applications_sort_priority_desc}</option>
+                <option value="followUpDate,asc">{t.applications_sort_follow_up_asc}</option>
               </select>
             </div>
 
@@ -743,8 +1497,10 @@ export function ApplicationsPage() {
             </div>
           </div>
 
-          <div className="text-sm text-[#6e6e73] dark:text-[#98989d]">
-            {t.applications_page_of(page + 1, Math.max(totalPages, 1))}
+          <div className="flex items-center gap-2">
+            <div className="text-sm text-[#6e6e73] dark:text-[#98989d]">
+              {t.applications_page_of(page + 1, Math.max(totalPages, 1))}
+            </div>
           </div>
         </div>
       </div>
@@ -804,7 +1560,13 @@ export function ApplicationsPage() {
 
       {/* Grid */}
       {!loading && !error && !showFirstApplicationCta && (
-        <>
+        <div className="relative">
+          <div
+            className={[
+              "transition-opacity duration-200",
+              isRefreshing ? "opacity-65 pointer-events-none select-none" : "opacity-100",
+            ].join(" ")}
+          >
           {showNoResultsCard ? (
             <div className="bg-white dark:bg-[#2c2c2e] rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.08)] p-8 text-center">
               <div className="text-[#1e1e1e] dark:text-[#f5f5f7] font-semibold">{t.applications_not_found_title}</div>
@@ -820,9 +1582,13 @@ export function ApplicationsPage() {
                     {t.clear_search}
                   </button>
                 )}
-                {statusFilter !== "ALL" && (
+                {(statusFilter !== "ALL" || followUpDueOnly || followUpOverdueOnly) && (
                   <button
-                    onClick={() => setStatusFilter("ALL")}
+                    onClick={() => {
+                      setStatusFilter("ALL");
+                      setFollowUpDueOnly(false);
+                      setFollowUpOverdueOnly(false);
+                    }}
                     className="h-10 px-4 rounded-md bg-[#0071e3] text-white text-sm font-medium hover:brightness-95"
                   >
                     {t.applications_clear_filters}
@@ -831,93 +1597,89 @@ export function ApplicationsPage() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {filteredApps.map((a) => (
-                <div
-                  key={a.id}
-                  className="bg-white dark:bg-[#2c2c2e] rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.08)] p-5 hover:shadow-[0_6px_16px_rgba(0,0,0,0.12)] transition-shadow"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex items-center gap-2">
-                      <CompanyLogo company={a.company} />
-                      <div className="font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] truncate">{a.company}</div>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {a.jobUrl && (
-                        <a
-                          href={a.jobUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-1.5 rounded-md text-[#0071e3] hover:bg-[#0071e3]/10 transition-colors"
-                          title={t.open_job_link}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                          </svg>
-                        </a>
-                      )}
-                      <button
-                        onClick={() => setOpenStatusFor(a)}
-                        className={`text-xs px-2 py-1 rounded-full ${STATUS_COLOR[a.status]} hover:brightness-95`}
-                        title={t.applications_change_status}
-                      >
-                        {statusLabels[a.status]}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 text-lg font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] leading-tight">{a.role}</div>
-
-                  {a.salary && (
-                    <div className="mt-2">
-                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-[#30d158]/15 text-[#1a8a3a] dark:bg-[#30d158]/20 dark:text-[#30d158] font-medium">
-                        💰 {a.salary}
-                      </span>
-                    </div>
-                  )}
-
-                  {a.notes && (
-                    <div className="mt-2 text-sm text-[#6e6e73] dark:text-[#98989d] line-clamp-2">
-                      {a.notes}
-                    </div>
-                  )}
-
-                  <div className="mt-3 text-sm text-[#6e6e73] dark:text-[#98989d]">
-                    {t.applications_applied_on}{" "}
-                    <span className="font-medium text-[#1e1e1e] dark:text-[#f5f5f7]">
-                      {a.appliedDate ? formatDateBR(a.appliedDate) : "—"}
-                    </span>
-                  </div>
-
-                  <div className="mt-5 flex items-center justify-between gap-2">
-                    <button
-                      onClick={() => setOpenStatusFor(a)}
-                      disabled={busyAction === a.id}
-                      className="h-9 px-3 rounded-md bg-black/5 dark:bg-white/5 text-[#1e1e1e] dark:text-[#f5f5f7] text-sm hover:bg-black/10 dark:hover:bg-white/10 disabled:opacity-60"
-                    >
-                      {busyAction === a.id ? t.applications_busy_updating : t.applications_change_status}
-                    </button>
-
-                    <button
-                      onClick={() => setOpenEditFor(a)}
-                      disabled={busyAction === a.id}
-                      className="h-9 px-3 rounded-md bg-white dark:bg-[#2c2c2e] border border-black/10 dark:border-white/10 text-[#1e1e1e] dark:text-[#f5f5f7] text-sm hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-60"
-                    >
-                      {t.edit}
-                    </button>
-
-                    <button
-                      onClick={() => setConfirmDelete(a)}
-                      disabled={busyAction === a.id}
-                      className="h-9 px-3 rounded-md bg-[#ff3b30] text-white text-sm hover:brightness-95 disabled:opacity-60"
-                    >
-                      {busyAction === a.id ? "..." : t.delete}
-                    </button>
-                  </div>
+            <>
+              {viewMode === "grid" ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {filteredApps.map((a) => (
+                    <ApplicationCard
+                      key={a.id}
+                      app={a}
+                      busyAction={busyAction}
+                      statusLabels={statusLabels}
+                      priorityLabels={priorityLabels}
+                      labels={t}
+                      onChangeStatus={() => setOpenStatusFor(a)}
+                      onOpenHistory={() => void onOpenHistory(a)}
+                      onEdit={() => setOpenEditFor(a)}
+                      onDelete={() => setConfirmDelete(a)}
+                    />
+                  ))}
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+                  {kanbanColumns.map((column) => {
+                    const columnApps = kanbanByStatus[column.status] ?? [];
+                    return (
+                      <div
+                        key={column.status}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          const rawId = event.dataTransfer.getData("text/plain");
+                          const appId = Number(rawId);
+                          if (!Number.isFinite(appId)) return;
+                          const dragged = filteredApps.find((item) => item.id === appId);
+                          if (!dragged) return;
+                          void onDropStatus(dragged, column.status);
+                        }}
+                        className="rounded-xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-[#2c2c2e]/70 p-3 min-h-[280px]"
+                      >
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="font-semibold text-sm text-[#1e1e1e] dark:text-[#f5f5f7]">
+                            {column.title}
+                          </div>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLOR[column.status]}`}>
+                            {columnApps.length}
+                          </span>
+                        </div>
+
+                        <div className="space-y-3">
+                          {columnApps.length === 0 && (
+                            <div className="text-xs text-[#6e6e73] dark:text-[#98989d] border border-dashed border-black/10 dark:border-white/10 rounded-lg p-3">
+                              {t.applications_kanban_empty}
+                            </div>
+                          )}
+                          {columnApps.map((a) => (
+                            <div
+                              key={a.id}
+                              draggable
+                              onDragStart={(event) => {
+                                event.dataTransfer.setData("text/plain", String(a.id));
+                                event.dataTransfer.effectAllowed = "move";
+                              }}
+                              className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#2c2c2e] p-3 cursor-grab active:cursor-grabbing shadow-sm"
+                            >
+                              <ApplicationCard
+                                app={a}
+                                compact
+                                busyAction={busyAction}
+                                statusLabels={statusLabels}
+                                priorityLabels={priorityLabels}
+                                labels={t}
+                                onChangeStatus={() => setOpenStatusFor(a)}
+                                onOpenHistory={() => void onOpenHistory(a)}
+                                onEdit={() => setOpenEditFor(a)}
+                                onDelete={() => setConfirmDelete(a)}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
 
           {/* Pagination */}
@@ -925,7 +1687,7 @@ export function ApplicationsPage() {
             <div className="flex items-center justify-center gap-2 pt-2">
               <button
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0 || loading}
+                disabled={page === 0 || loading || isRefreshing}
                 className="h-9 px-3 rounded-md bg-white dark:bg-[#2c2c2e] border border-black/10 dark:border-white/10 text-sm text-[#1e1e1e] dark:text-[#f5f5f7] hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
               >
                 {t.previous}
@@ -939,14 +1701,22 @@ export function ApplicationsPage() {
 
               <button
                 onClick={() => setPage((p) => Math.min(Math.max(totalPages - 1, 0), p + 1))}
-                disabled={page >= totalPages - 1 || loading || totalPages === 0}
+                disabled={page >= totalPages - 1 || loading || isRefreshing || totalPages === 0}
                 className="h-9 px-3 rounded-md bg-white dark:bg-[#2c2c2e] border border-black/10 dark:border-white/10 text-sm text-[#1e1e1e] dark:text-[#f5f5f7] hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
               >
                 {t.next}
               </button>
             </div>
           )}
-        </>
+          </div>
+
+          {isRefreshing && (
+            <div className="absolute right-2 top-2 flex items-center gap-2 rounded-full border border-black/10 dark:border-white/10 bg-white/90 dark:bg-[#1f1f21]/90 px-3 py-1.5 text-xs text-[#6e6e73] dark:text-[#98989d] backdrop-blur-sm">
+              <span className="h-2 w-2 rounded-full bg-[#0071e3] animate-pulse" />
+              {t.loading}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Create Modal */}
@@ -959,7 +1729,9 @@ export function ApplicationsPage() {
               company: "",
               role: "",
               status: "APPLIED",
+              priority: "MEDIUM",
               appliedDate: todayISO(),
+              followUpDate: "",
               notes: "",
               jobUrl: "",
               salary: "",
@@ -981,7 +1753,9 @@ export function ApplicationsPage() {
               company: openEditFor.company ?? "",
               role: openEditFor.role ?? "",
               status: openEditFor.status,
+              priority: openEditFor.priority ?? "MEDIUM",
               appliedDate: safeISODate(openEditFor.appliedDate),
+              followUpDate: openEditFor.followUpDate ? safeISODate(openEditFor.followUpDate) : "",
               notes: openEditFor.notes ?? "",
               jobUrl: openEditFor.jobUrl ?? "",
               salary: openEditFor.salary ?? "",
@@ -1033,6 +1807,55 @@ export function ApplicationsPage() {
         </Modal>
       )}
 
+      {/* Status history modal */}
+      {openHistoryFor && (
+        <Modal title={t.applications_history_title} onClose={() => setOpenHistoryFor(null)} closeLabel={t.close}>
+          <div className="space-y-3">
+            <div className="text-sm text-[#6e6e73] dark:text-[#98989d]">
+              <span className="font-medium text-[#1e1e1e] dark:text-[#f5f5f7]">{openHistoryFor.company}</span> —{" "}
+              {openHistoryFor.role}
+            </div>
+
+            {historyLoading && (
+              <div className="text-sm text-[#6e6e73] dark:text-[#98989d]">{t.applications_history_loading}</div>
+            )}
+
+            {!historyLoading && historyError && (
+              <div className="text-sm text-[#ff3b30]">{historyError}</div>
+            )}
+
+            {!historyLoading && !historyError && historyItems.length === 0 && (
+              <div className="text-sm text-[#6e6e73] dark:text-[#98989d]">{t.applications_history_empty}</div>
+            )}
+
+            {!historyLoading && !historyError && historyItems.length > 0 && (
+              <div className="max-h-[360px] overflow-y-auto pr-1 space-y-2">
+                {historyItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#2c2c2e] p-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-medium text-[#1e1e1e] dark:text-[#f5f5f7]">
+                        {item.fromStatus
+                          ? `${statusLabels[item.fromStatus]} → ${statusLabels[item.toStatus]}`
+                          : `${t.applications_history_initial}: ${statusLabels[item.toStatus]}`}
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded-full ${STATUS_COLOR[item.toStatus]}`}>
+                        {statusLabels[item.toStatus]}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-[#6e6e73] dark:text-[#98989d]">
+                      {formatDateTimeLocalized(item.changedAt, profile.language)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
       {/* Delete confirm modal */}
       {confirmDelete && (
         <Modal title={t.applications_delete_title} onClose={() => setConfirmDelete(null)} closeLabel={t.close}>
@@ -1065,6 +1888,170 @@ export function ApplicationsPage() {
 
 /* ---------- Small components ---------- */
 
+function ApplicationCard({
+  app,
+  busyAction,
+  statusLabels,
+  priorityLabels,
+  labels,
+  onChangeStatus,
+  onOpenHistory,
+  onEdit,
+  onDelete,
+  compact = false,
+}: {
+  app: Application;
+  busyAction: number | null;
+  statusLabels: Record<ApplicationStatus, string>;
+  priorityLabels: Record<ApplicationPriority, string>;
+  labels: Translations;
+  onChangeStatus: () => void;
+  onOpenHistory: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  compact?: boolean;
+}) {
+  const followUpKind = getFollowUpKind(app.followUpDate);
+
+  return (
+    <div
+      className={[
+        compact
+          ? "space-y-2"
+          : "bg-white dark:bg-[#2c2c2e] rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.08)] p-5 hover:shadow-[0_6px_16px_rgba(0,0,0,0.12)] motion-safe:hover:-translate-y-0.5 transition-all duration-200",
+      ].join(" ")}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex items-center gap-2">
+          <CompanyLogo company={app.company} />
+          <div className="font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] truncate">{app.company}</div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {app.jobUrl && (
+            <a
+              href={app.jobUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1.5 rounded-md text-[#0071e3] hover:bg-[#0071e3]/10 transition-colors"
+              title={labels.open_job_link}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+            </a>
+          )}
+          <button
+            onClick={onChangeStatus}
+            className={`text-xs px-2 py-1 rounded-full ${STATUS_COLOR[app.status]} hover:brightness-95`}
+            title={labels.applications_change_status}
+          >
+            {statusLabels[app.status]}
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-3 text-lg font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] leading-tight">
+        {app.role}
+      </div>
+
+      <div className="mt-2">
+        <span
+          className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
+            PRIORITY_COLOR[app.priority ?? "MEDIUM"]
+          }`}
+        >
+          {labels.priority}: {priorityLabels[app.priority ?? "MEDIUM"]}
+        </span>
+      </div>
+
+      {app.salary && (
+        <div className="mt-2">
+          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-[#30d158]/15 text-[#1a8a3a] dark:bg-[#30d158]/20 dark:text-[#30d158] font-medium">
+            💰 {app.salary}
+          </span>
+        </div>
+      )}
+
+      {app.followUpDate && (
+        <div
+          className={[
+            "mt-2 text-xs font-medium",
+            followUpKind === "overdue"
+              ? "text-[#ff3b30]"
+              : followUpKind === "today"
+                ? "text-[#ff9500]"
+                : "text-[#6e6e73] dark:text-[#98989d]",
+          ].join(" ")}
+        >
+          {followUpKind === "overdue"
+            ? labels.applications_followup_overdue
+            : followUpKind === "today"
+              ? labels.applications_followup_due_today
+              : labels.applications_followup_due_on(formatDateBR(app.followUpDate))}
+        </div>
+      )}
+
+      {app.notes && !compact && (
+        <div className="mt-2 text-sm text-[#6e6e73] dark:text-[#98989d] line-clamp-2">
+          {app.notes}
+        </div>
+      )}
+
+      <div className="mt-3 text-sm text-[#6e6e73] dark:text-[#98989d]">
+        {labels.applications_applied_on}{" "}
+        <span className="font-medium text-[#1e1e1e] dark:text-[#f5f5f7]">
+          {app.appliedDate ? formatDateBR(app.appliedDate) : "—"}
+        </span>
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-center gap-2">
+        <button
+          onClick={onChangeStatus}
+          disabled={busyAction === app.id}
+          className="h-9 px-3 rounded-md bg-black/5 dark:bg-white/5 text-[#1e1e1e] dark:text-[#f5f5f7] text-sm hover:bg-black/10 dark:hover:bg-white/10 disabled:opacity-60"
+        >
+          {busyAction === app.id ? labels.applications_busy_updating : labels.applications_change_status}
+        </button>
+
+        <button
+          onClick={onOpenHistory}
+          className="h-9 px-3 rounded-md bg-white dark:bg-[#2c2c2e] border border-black/10 dark:border-white/10 text-[#1e1e1e] dark:text-[#f5f5f7] text-sm hover:bg-black/5 dark:hover:bg-white/5"
+        >
+          {labels.applications_history}
+        </button>
+
+        <button
+          onClick={onEdit}
+          disabled={busyAction === app.id}
+          className="h-9 px-3 rounded-md bg-white dark:bg-[#2c2c2e] border border-black/10 dark:border-white/10 text-[#1e1e1e] dark:text-[#f5f5f7] text-sm hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-60"
+        >
+          {labels.edit}
+        </button>
+
+        <button
+          onClick={onDelete}
+          disabled={busyAction === app.id}
+          className="h-9 px-3 rounded-md bg-[#ff3b30] text-white text-sm hover:brightness-95 disabled:opacity-60"
+        >
+          {busyAction === app.id ? "..." : labels.delete}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CompanyLogo({ company }: { company: string }) {
   const logoCandidates = useMemo(() => resolveCompanyLogoUrls(company), [company]);
   const [logoState, setLogoState] = useState<{ company: string; index: number }>({
@@ -1096,19 +2083,22 @@ function CompanyLogo({ company }: { company: string }) {
 function FilterChip({
   active,
   onClick,
+  disabled,
   children,
 }: {
   active?: boolean;
   onClick: () => void;
+  disabled?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={[
         // base
-        "px-3 py-1.5 rounded-full text-sm shadow-sm transition-colors",
+        "px-3 py-1.5 rounded-full text-sm shadow-sm transition-all duration-200 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed",
         "border",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-black/20",
 
@@ -1184,7 +2174,9 @@ type FormInitial = {
   company: string;
   role: string;
   status: ApplicationStatus;
+  priority: ApplicationPriority;
   appliedDate: string;
+  followUpDate?: string;
   notes?: string;
   jobUrl?: string;
   salary?: string;
@@ -1206,7 +2198,9 @@ function ApplicationForm({
   const [company, setCompany] = useState(initial.company);
   const [role, setRole] = useState(initial.role);
   const [status, setStatus] = useState<ApplicationStatus>(initial.status);
+  const [priority, setPriority] = useState<ApplicationPriority>(initial.priority);
   const [appliedDate, setAppliedDate] = useState<string>(safeISODate(initial.appliedDate));
+  const [followUpDate, setFollowUpDate] = useState<string>(initial.followUpDate ?? "");
   const [notes, setNotes] = useState(initial.notes ?? "");
   const [jobUrl, setJobUrl] = useState(initial.jobUrl ?? "");
   const [salary, setSalary] = useState(initial.salary ?? "");
@@ -1218,6 +2212,11 @@ function ApplicationForm({
     { value: "INTERVIEW", label: labels.status_interview },
     { value: "OFFER", label: labels.status_offer },
     { value: "REJECTED", label: labels.status_rejected },
+  ];
+  const formPriorityOptions: { value: ApplicationPriority; label: string }[] = [
+    { value: "HIGH", label: labels.priority_high },
+    { value: "MEDIUM", label: labels.priority_medium },
+    { value: "LOW", label: labels.priority_low },
   ];
 
   return (
@@ -1231,7 +2230,9 @@ function ApplicationForm({
           company: company.trim(),
           role: role.trim(),
           status,
+          priority,
           appliedDate,
+          followUpDate: followUpDate.trim() || null,
           notes: notes.trim() || null,
           jobUrl: jobUrl.trim() || null,
           salary: salary.trim() || null,
@@ -1280,6 +2281,43 @@ function ApplicationForm({
             onChange={(e) => setAppliedDate(e.target.value)}
             className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7]"
           />
+        </Field>
+
+        <Field label={labels.priority}>
+          <select
+            value={priority}
+            onChange={(e) => setPriority(e.target.value as ApplicationPriority)}
+            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7]"
+          >
+            {formPriorityOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field
+          label={
+            <span className="inline-flex items-center gap-2">
+              <span>{labels.follow_up_date}</span>
+              <span
+                className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-black/20 dark:border-white/25 bg-[#e8e8ed] dark:bg-[#3a3a3c] text-[11px] font-bold text-[#4a4a4f] dark:text-[#d1d1d6] cursor-help select-none"
+                title={labels.follow_up_help}
+                aria-label={labels.follow_up_help}
+              >
+                ?
+              </span>
+            </span>
+          }
+        >
+          <input
+            type="date"
+            value={followUpDate}
+            onChange={(e) => setFollowUpDate(e.target.value)}
+            className="h-10 w-full rounded-md border border-black/10 dark:border-white/10 px-3 text-sm outline-none focus:border-black/20 bg-white dark:bg-[#3a3a3c] text-[#1e1e1e] dark:text-[#f5f5f7]"
+          />
+          <div className="mt-1 text-xs text-[#6e6e73] dark:text-[#98989d]">{labels.follow_up_help}</div>
         </Field>
 
         <Field label={labels.salary}>
@@ -1333,7 +2371,7 @@ function ApplicationForm({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <label className="block">
       <div className="text-sm font-medium text-[#1e1e1e] dark:text-[#f5f5f7] mb-1">{label}</div>

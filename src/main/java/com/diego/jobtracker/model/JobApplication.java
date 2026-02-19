@@ -30,7 +30,14 @@ public class JobApplication {
     @Column(nullable = false)
     private ApplicationStatus status;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private ApplicationPriority priority = ApplicationPriority.MEDIUM;
+
     private LocalDate appliedDate;
+
+    @Column(name = "follow_up_date")
+    private LocalDate followUpDate;
 
     @Column(columnDefinition = "TEXT")
     private String notes;
@@ -66,8 +73,14 @@ public class JobApplication {
     public ApplicationStatus getStatus() { return status; }
     public void setStatus(ApplicationStatus status) { this.status = status; }
 
+    public ApplicationPriority getPriority() { return priority; }
+    public void setPriority(ApplicationPriority priority) { this.priority = priority; }
+
     public LocalDate getAppliedDate() { return appliedDate; }
     public void setAppliedDate(LocalDate appliedDate) { this.appliedDate = appliedDate; }
+
+    public LocalDate getFollowUpDate() { return followUpDate; }
+    public void setFollowUpDate(LocalDate followUpDate) { this.followUpDate = followUpDate; }
 
     public String getNotes() { return notes; }
     public void setNotes(String notes) { this.notes = notes; }

@@ -106,11 +106,45 @@ export function StatisticsPage() {
 
   const monthlyData = groupByMonth(apps);
   const sortedMonths = Object.keys(monthlyData).sort();
-  const maxMonthly = Math.max(...Object.values(monthlyData), 1);
+  const monthlyPoints = sortedMonths.map((month) => {
+    const count = monthlyData[month];
+    const [y, m] = month.split("-");
+    const monthDate = new Date(Date.UTC(parseInt(y, 10), parseInt(m, 10) - 1, 1));
+    const monthName = monthFormatter.format(monthDate).replace(".", "");
+    const shortYear = y.slice(2);
+    return {
+      month,
+      count,
+      label: `${monthName}/${shortYear}`,
+    };
+  });
+  const maxMonthly = Math.max(...monthlyPoints.map((item) => item.count), 1);
 
-  const toInterviewRate = (((s.interview + s.offer) / s.total) * 100).toFixed(1);
-  const toOfferRate = ((s.offer / s.total) * 100).toFixed(1);
+  const interviewRateValue = s.total > 0 ? (s.interview + s.offer) / s.total : 0;
+  const offerRateValue = s.total > 0 ? s.offer / s.total : 0;
+  const rejectedRateValue = s.total > 0 ? s.rejected / s.total : 0;
+
+  const toInterviewRate = (interviewRateValue * 100).toFixed(1);
+  const toOfferRate = (offerRateValue * 100).toFixed(1);
   const interviewToOffer = s.interview > 0 ? ((s.offer / s.interview) * 100).toFixed(1) : "—";
+
+  const interviewPerTen = Math.round(interviewRateValue * 10);
+  const offerPerTen = Math.round(offerRateValue * 10);
+  const rejectedPerTen = Math.round(rejectedRateValue * 10);
+  const quickTip =
+    offerRateValue >= 0.15
+      ? t.statistics_tip_keep
+      : interviewRateValue < 0.25
+        ? t.statistics_tip_interview
+        : t.statistics_tip_offer;
+  const averagePerMonth = monthlyPoints.length > 0 ? s.total / monthlyPoints.length : 0;
+  const bestMonth = monthlyPoints.reduce<{ label: string; count: number } | null>(
+    (best, current) => {
+      if (!best || current.count > best.count) return { label: current.label, count: current.count };
+      return best;
+    },
+    null
+  );
 
   return (
     <div className="space-y-6">
@@ -123,11 +157,46 @@ export function StatisticsPage() {
         </p>
       </div>
 
+      <div className="bg-white dark:bg-[#2c2c2e] rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.08)] p-5">
+        <h2 className="font-semibold text-[#1e1e1e] dark:text-[#f5f5f7]">{t.statistics_simple_title}</h2>
+        <p className="text-sm text-[#6e6e73] dark:text-[#98989d] mt-1">{t.statistics_simple_desc}</p>
+
+        <div className="mt-4 text-sm font-medium text-[#1e1e1e] dark:text-[#f5f5f7]">
+          {t.statistics_out_of_ten}
+        </div>
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <SimpleSummaryCard
+            value={`${interviewPerTen}/10`}
+            label={t.statistics_ten_interviews}
+            accent="text-[#ff9500]"
+            bg="bg-[#ff9500]/10"
+          />
+          <SimpleSummaryCard
+            value={`${offerPerTen}/10`}
+            label={t.statistics_ten_offers}
+            accent="text-[#30d158]"
+            bg="bg-[#30d158]/10"
+          />
+          <SimpleSummaryCard
+            value={`${rejectedPerTen}/10`}
+            label={t.statistics_ten_rejected}
+            accent="text-[#ff3b30]"
+            bg="bg-[#ff3b30]/10"
+          />
+        </div>
+
+        <div className="mt-4 rounded-md border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 px-3 py-2">
+          <span className="text-sm font-semibold text-[#1e1e1e] dark:text-[#f5f5f7]">{t.statistics_tip_title}: </span>
+          <span className="text-sm text-[#6e6e73] dark:text-[#98989d]">{quickTip}</span>
+        </div>
+      </div>
+
       {/* Status distribution */}
       <div className="bg-white dark:bg-[#2c2c2e] rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.08)] p-5">
         <h2 className="font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] mb-5">
           {t.status_distribution}
         </h2>
+        <p className="text-sm text-[#6e6e73] dark:text-[#98989d] -mt-3 mb-5">{t.status_distribution_desc}</p>
         <div className="space-y-5">
           {STATUS_CONFIG.map(({ key, labelKey, bar, track }) => {
             const count = s[key];
@@ -163,6 +232,7 @@ export function StatisticsPage() {
           <h2 className="font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] mb-5">
             {t.conversion_funnel}
           </h2>
+          <p className="text-sm text-[#6e6e73] dark:text-[#98989d] -mt-3 mb-5">{t.conversion_funnel_desc}</p>
           <div className="space-y-4">
             <FunnelStep
               label={t.all_applications}
@@ -192,6 +262,7 @@ export function StatisticsPage() {
           <h2 className="font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] mb-5">
             {t.conversion_rates}
           </h2>
+          <p className="text-sm text-[#6e6e73] dark:text-[#98989d] -mt-3 mb-5">{t.conversion_rates_desc}</p>
           <div className="space-y-4">
             <ConversionRow
               label={t.app_to_interview}
@@ -216,24 +287,28 @@ export function StatisticsPage() {
       </div>
 
       {/* Monthly bar chart */}
-      {sortedMonths.length > 0 && (
+      {monthlyPoints.length > 0 && (
         <div className="bg-white dark:bg-[#2c2c2e] rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.08)] p-5">
           <h2 className="font-semibold text-[#1e1e1e] dark:text-[#f5f5f7] mb-5">
             {t.monthly_chart}
           </h2>
+          <p className="text-sm text-[#6e6e73] dark:text-[#98989d] -mt-3 mb-4">{t.monthly_chart_desc}</p>
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            {bestMonth && (
+              <span className="text-xs px-2 py-1 rounded-full bg-[#0071e3]/10 text-[#0071e3]">
+                {t.monthly_best_month(bestMonth.label, bestMonth.count)}
+              </span>
+            )}
+            <span className="text-xs px-2 py-1 rounded-full bg-black/10 dark:bg-white/10 text-[#6e6e73] dark:text-[#98989d]">
+              {t.monthly_average(averagePerMonth)}
+            </span>
+          </div>
           <div className="flex items-end gap-2" style={{ height: 120 }}>
-            {sortedMonths.map((month) => {
-              const count = monthlyData[month];
-              const heightPct = (count / maxMonthly) * 100;
-              const [y, m] = month.split("-");
-              const monthDate = new Date(Date.UTC(parseInt(y, 10), parseInt(m, 10) - 1, 1));
-              const monthName = monthFormatter.format(monthDate).replace(".", "");
-              const shortYear = y.slice(2);
+            {monthlyPoints.map((point) => {
+              const heightPct = (point.count / maxMonthly) * 100;
               return (
-                <div key={month} className="flex-1 flex flex-col items-center gap-1 group min-w-0">
-                  <span className="text-xs font-semibold text-[#0071e3] opacity-0 group-hover:opacity-100 transition-opacity">
-                    {count}
-                  </span>
+                <div key={point.month} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+                  <span className="text-xs font-semibold text-[#0071e3]">{point.count}</span>
                   <div
                     className="w-full flex items-end bg-[#0071e3]/10 dark:bg-[#0071e3]/20 rounded-t-sm"
                     style={{ height: 90 }}
@@ -244,7 +319,7 @@ export function StatisticsPage() {
                     />
                   </div>
                   <span className="text-xs text-[#6e6e73] dark:text-[#98989d] truncate w-full text-center">
-                    {monthName}/{shortYear}
+                    {point.label}
                   </span>
                 </div>
               );
@@ -252,6 +327,25 @@ export function StatisticsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function SimpleSummaryCard({
+  value,
+  label,
+  accent,
+  bg,
+}: {
+  value: string;
+  label: string;
+  accent: string;
+  bg: string;
+}) {
+  return (
+    <div className={`rounded-lg px-4 py-3 ${bg}`}>
+      <div className={`text-2xl font-bold ${accent}`}>{value}</div>
+      <div className="text-xs text-[#6e6e73] dark:text-[#98989d] mt-1">{label}</div>
     </div>
   );
 }

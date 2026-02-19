@@ -1,4 +1,4 @@
-import type { Application, ApplicationStatus, PageResponse } from "./types";
+import type { Application, ApplicationPriority, ApplicationStatus, PageResponse } from "./types";
 import { buildAuthJsonHeaders, notifyUnauthorizedFromStatus } from "./auth";
 
 const BASE_URL =
@@ -9,6 +9,8 @@ type ListParams = {
   size?: number;
   sort?: string; // ex: "appliedDate,desc"
   status?: ApplicationStatus;
+  followUpDue?: boolean;
+  followUpOverdue?: boolean;
 };
 
 async function http<T>(input: string, init?: RequestInit): Promise<T> {
@@ -38,6 +40,8 @@ export async function listApplications(params: ListParams): Promise<PageResponse
   sp.set("size", String(params.size ?? 12));
   if (params.sort) sp.set("sort", params.sort);
   if (params.status) sp.set("status", params.status);
+  if (params.followUpDue) sp.set("followUpDue", "true");
+  if (params.followUpOverdue) sp.set("followUpOverdue", "true");
 
   return http<PageResponse<Application>>(`/applications?${sp.toString()}`);
 }
@@ -46,7 +50,12 @@ export type CreateApplicationInput = {
   company: string;
   role: string;
   status: ApplicationStatus;
+  priority?: ApplicationPriority | null;
   appliedDate: string;
+  followUpDate?: string | null;
+  notes?: string | null;
+  jobUrl?: string | null;
+  salary?: string | null;
 };
 
 export async function createApplication(body: CreateApplicationInput): Promise<Application> {

@@ -15,6 +15,17 @@ Frontend do Job Tracker.
 - Node.js 20+
 - npm
 
+## Funcionalidades da UI
+
+- Login/cadastro e sessão por cookie `HttpOnly`
+- Dashboard com métricas e candidaturas recentes
+- Cards de candidatura com filtros, busca e ordenação
+- Modo Kanban com drag-and-drop de status
+- Histórico de status por candidatura
+- Follow-up (due/overdue), com notificações no sino da Topbar
+- Import/Export CSV e Backup/Restore JSON
+- Estatísticas com resumo simplificado
+
 ## Desenvolvimento local
 
 ```bash
@@ -49,6 +60,12 @@ Com Docker Compose, o valor recomendado é:
 
 ```env
 VITE_API_URL=/api
+```
+
+Se fizer alterações no frontend e não refletir no browser, execute:
+
+```bash
+docker compose up --build -d frontend
 ```
 
 ## Scripts

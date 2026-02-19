@@ -2,8 +2,13 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Briefcase, Clock, Plus, TrendingUp, Trophy, XCircle } from "lucide-react";
 import type { Application, ApplicationStatus } from "../lib/types";
-import { fetchRecentApplications, fetchStatusCount, fetchTotalCount } from "../lib/apiClient";
-import { useTranslation } from "../context/UserContext";
+import {
+  fetchDueFollowUps,
+  fetchRecentApplications,
+  fetchStatusCount,
+  fetchTotalCount,
+} from "../lib/apiClient";
+import { useTranslation, useUser } from "../context/UserContext";
 
 type Stats = {
   total: number;
@@ -33,9 +38,11 @@ function getErrorMessage(error: unknown, fallback: string) {
 export function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [recent, setRecent] = useState<Application[]>([]);
+  const [dueFollowUps, setDueFollowUps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const t = useTranslation();
+  const { profile } = useUser();
   const statusLabels: Record<ApplicationStatus, string> = {
     APPLIED: t.status_applied,
     INTERVIEW: t.status_interview,
@@ -47,17 +54,19 @@ export function DashboardPage() {
     let alive = true;
     async function load() {
       try {
-        const [total, applied, interview, offer, rejected, recentApps] = await Promise.all([
+        const [total, applied, interview, offer, rejected, recentApps, dueApps] = await Promise.all([
           fetchTotalCount(),
           fetchStatusCount("APPLIED"),
           fetchStatusCount("INTERVIEW"),
           fetchStatusCount("OFFER"),
           fetchStatusCount("REJECTED"),
           fetchRecentApplications(5),
+          fetchDueFollowUps(5),
         ]);
         if (!alive) return;
         setStats({ total, applied, interview, offer, rejected });
         setRecent(recentApps);
+        setDueFollowUps(dueApps);
       } catch (error: unknown) {
         if (alive) setError(getErrorMessage(error, t.error_loading));
       } finally {
@@ -152,7 +161,46 @@ export function DashboardPage() {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="space-y-4">
+          <div className="bg-white dark:bg-[#2c2c2e] rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.08)] p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold text-[#1e1e1e] dark:text-[#f5f5f7]">
+                {t.dashboard_followups_title}
+              </h2>
+              <Link to="/applications" className="text-sm text-[#0071e3] hover:underline">
+                {t.see_all}
+              </Link>
+            </div>
+
+            {dueFollowUps.length === 0 ? (
+              <div className="text-sm text-[#6e6e73] dark:text-[#98989d]">{t.dashboard_followups_empty}</div>
+            ) : (
+              <div className="space-y-2">
+                {dueFollowUps.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between gap-3 rounded-md border border-black/10 dark:border-white/10 px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-[#1e1e1e] dark:text-[#f5f5f7] truncate">
+                        {a.company} - {a.role}
+                      </div>
+                      <div className="text-xs text-[#6e6e73] dark:text-[#98989d]">
+                        {a.followUpDate
+                          ? formatFollowUpLabel(a.followUpDate, profile.language, t)
+                          : t.dashboard_followups_empty}
+                      </div>
+                    </div>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLOR[a.status]} shrink-0`}>
+                      {statusLabels[a.status]}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Recent applications */}
           <div className="lg:col-span-2 bg-white dark:bg-[#2c2c2e] rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.08)] p-5">
             <div className="flex items-center justify-between mb-4">
@@ -220,9 +268,27 @@ export function DashboardPage() {
             </div>
           </div>
         </div>
+        </div>
       )}
     </div>
   );
+}
+
+function formatFollowUpLabel(iso: string, language: "pt" | "en", t: ReturnType<typeof useTranslation>) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(y, (m || 1) - 1, d || 1);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+  const delta = date.getTime() - today.getTime();
+
+  if (delta < 0) return t.applications_followup_overdue;
+  if (delta === 0) return t.applications_followup_due_today;
+
+  const formatted = new Intl.DateTimeFormat(language === "pt" ? "pt-BR" : "en-US", {
+    dateStyle: "medium",
+  }).format(date);
+  return t.applications_followup_due_on(formatted);
 }
 
 function StatCard({
